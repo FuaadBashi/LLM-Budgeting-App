@@ -19,6 +19,8 @@ from sqlalchemy import text  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 from app.db import SessionLocal  # noqa: E402
+from app.domain.obligations import generate_instances, match_instances  # noqa: E402
+from app.domain.recurrence import Frequency, build_rule  # noqa: E402
 from app.models import (  # noqa: E402
     Account,
     AccountKind,
@@ -28,6 +30,7 @@ from app.models import (  # noqa: E402
     Category,
     CategoryNature,
     ExpectedIncome,
+    FutureObligation,
     GoalPriority,
     Posting,
     RolloverPolicy,
@@ -147,8 +150,25 @@ def main() -> None:
                            next_expected_date=date(2026, 9, 1)),
         ])
 
+        # Rent is a recurring commitment, not just a past transaction: the
+        # forecast needs the rule so future months are already accounted for.
+        session.add(
+            FutureObligation(
+                name="Rent",
+                amount=Decimal("1200"),
+                first_due_date=date(2026, 8, 2),
+                rrule=build_rule(Frequency.MONTHLY, date(2026, 8, 2)),
+                category_id=rent_cat.id,
+                hard=True,
+            )
+        )
         session.commit()
+
+        generated = generate_instances(session, date(2027, 8, 31))
+        matched = match_instances(session, TODAY)
         print(f"seeded demo data as at {TODAY}")
+        print(f"  {generated.created} obligation instances generated, "
+              f"{matched.matched} matched to existing transactions")
 
 
 if __name__ == "__main__":

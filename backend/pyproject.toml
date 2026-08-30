@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.13",
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.0",
+    "python-dateutil>=2.9",
 ]
 
 [project.optional-dependencies]
