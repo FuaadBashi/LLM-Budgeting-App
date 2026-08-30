@@ -98,6 +98,7 @@ class BudgetPeriodOut(BaseModel):
     presented_allowance_minor: int | None
     binding_constraint: str | None
 
+    expected_to_date_minor: int | None
     pace_variance_minor: int | None
     pace_ratio: float | None
     projected_spend_minor: int | None

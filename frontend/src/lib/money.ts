@@ -15,14 +15,22 @@ const FORMATTER = new Intl.NumberFormat("en-GB", {
 });
 
 export function formatMinor(minor: Minor): string {
-  return FORMATTER.format(minor / 100);
+  // Intl emits a hyphen-minus; formatSignedMinor uses a true minus (U+2212).
+  // Both appear inside the same card, so normalise on the typographic one.
+  return FORMATTER.format(minor / 100).replace("-", "−");
 }
 
-/** Signed display: an explicit + on positive drivers reads better in a breakdown. */
+/**
+ * Signed display for breakdown rows: an explicit + marks a positive driver.
+ *
+ * Zero takes no sign. "+£0.00" reads as a positive contribution of nothing,
+ * which is a distraction in a column the eye scans for direction.
+ */
 export function formatSignedMinor(minor: Minor): string {
   const formatted = formatMinor(Math.abs(minor));
   if (minor < 0) return `−${formatted}`;
-  return `+${formatted}`;
+  if (minor > 0) return `+${formatted}`;
+  return formatted;
 }
 
 export function isNegative(minor: Minor): boolean {

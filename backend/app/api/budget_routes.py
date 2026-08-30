@@ -83,6 +83,9 @@ def _period_out(r: BudgetPeriodResult) -> BudgetPeriodOut:
             else None
         ),
         binding_constraint=r.binding_constraint,
+        expected_to_date_minor=(
+            to_minor(r.expected_to_date) if r.expected_to_date is not None else None
+        ),
         pace_variance_minor=(
             to_minor(r.pace_variance) if r.pace_variance is not None else None
         ),
