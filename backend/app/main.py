@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.budget_routes import router as budget_router
 from app.api.routes import router
 
 app = FastAPI(
@@ -20,3 +21,4 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.include_router(budget_router, prefix="/api")

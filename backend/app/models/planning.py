@@ -49,27 +49,86 @@ class UserProfile(TimestampedUUID, Base):
 
 
 class Budget(TimestampedUUID, Base):
+    """Identity and calendar grid only.
+
+    The plan -- amount, rollover policy, whether it is running -- lives in
+    effective-dated ``BudgetRevision`` rows. A budget whose amount is one mutable
+    column cannot answer "what was the budget in March?", so editing £300 to £400
+    silently recomputes every historical period's rollover: in a worked example an
+    eight-month chain moved from £390 to £1,090 on a single edit. Every mature
+    system stores the amount per period for this reason (YNAB, Actual Budget,
+    Firefly III budget_limits, GnuCash budget amounts).
+    """
+
     __tablename__ = "budgets"
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     period: Mapped[BudgetPeriod] = mapped_column(
         Enum(BudgetPeriod, name="budget_period", native_enum=False), nullable=False
     )
+    # Fortnightly has no natural calendar anchor, so it needs an explicit epoch
+    # (rulebook section 8). Required for fortnightly, forbidden otherwise -- an
+    # accepted-and-ignored anchor on a monthly budget is worse than a rejected
+    # one, because the user believes their month resets on the 25th.
+    anchor_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # The rollover chain's base case. Without it the recursion RolloverIn(N) =
+    # f(Remaining(N-1)) has no termination, and anchoring it on the fortnightly
+    # epoch instead conjures phantom periods -- a budget created in August with a
+    # January anchor opened with £3,000 of rollover it never earned.
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # Null scope means total discretionary spending.
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("categories.id"), nullable=True
+    )
+
+    revisions: Mapped[list[BudgetRevision]] = relationship(
+        back_populates="budget",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="BudgetRevision.effective_from",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Budget {self.name} ({self.period})>"
+
+
+class BudgetRevision(TimestampedUUID, Base):
+    """The plan in force from ``effective_from`` onward.
+
+    Editing a budget appends a revision rather than mutating one, so closed periods
+    keep the amount that was actually in force. Backdating is possible but is an
+    explicit act that must first report which closed periods it rewrites.
+    """
+
+    __tablename__ = "budget_revisions"
+
+    budget_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("budgets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+
     amount: Mapped[Decimal] = mapped_column(Money, nullable=False)
     rollover_policy: Mapped[RolloverPolicy] = mapped_column(
         Enum(RolloverPolicy, name="rollover_policy", native_enum=False),
         nullable=False,
         default=RolloverPolicy.NONE,
     )
-    # Fortnightly has no natural calendar anchor, so it needs an explicit epoch
-    # (rulebook section 8). Harmless for other periods.
-    anchor_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    # Null scope means total discretionary spending.
-    category_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("categories.id"), nullable=True
-    )
-    hard: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # A paused period contributes neither amount nor spend, and does not extend
+    # the chain. Pausing is not deleting: the carry resumes where it left off.
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Explicitly zero the carry from this revision forward ("start again").
+    rollover_reset: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    budget: Mapped[Budget] = relationship(back_populates="revisions")
+
+    __table_args__ = (
+        UniqueConstraint("budget_id", "effective_from", name="uq_revision_effective"),
+    )
 
 
 class SavingsGoal(TimestampedUUID, Base):

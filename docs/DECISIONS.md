@@ -78,6 +78,53 @@ is paid.
 
 ---
 
+## Budget engine (Phase 3). Decided 31 August 2026
+
+Derived from a five-lens adversarial analysis; the full reasoning is in
+[BUDGET_ENGINE_SPEC.md](BUDGET_ENGINE_SPEC.md).
+
+**Budgets are effective-dated.** `Budget` holds identity and calendar grid; `BudgetRevision` holds
+amount, rollover policy and active flag from a date. A mutable `amount` column retroactively
+rewrote every historical period — one £300→£400 edit moved an eight-month chain's answer from
+£390 to £1,090.
+
+**`start_date` is the rollover chain's base case**, and is distinct from `anchor_date`. Conflating
+them opened a new fortnightly budget with £3,000 of rollover it never earned.
+
+**`anchor_date` is required for fortnightly and forbidden otherwise**, by database CHECK. Silently
+ignoring it on a monthly budget means the user believes their month resets on the 25th while it
+resets on the 1st.
+
+**Quarterly = calendar quarters. Annual = calendar year.** Neither was defined. The UK tax year is
+the plausible alternative for a GBP product and would put 5 April in the previous quarter.
+
+**`Spent` is a signed, posting-level sum over expense-kind legs only.** Filtering on category alone
+nets a fully-tagged transaction to £0.00 — a silent zero. Transfers being excluded falls out of the
+account-kind filter rather than needing a second rule.
+
+**Uncategorised spend counts toward a null-scope budget**; the discretionary filter applies only to
+null scope. Otherwise an explicitly-scoped essential budget reads £0.00 for ever.
+
+**`positive_only` clamps the whole previous `Remaining`, once.** The alternative lets a surplus a
+later overspend already consumed be spent a second time.
+
+**`full` floors the carried deficit at one period's amount.** Uncapped it reaches −£7,200 in three
+years and quotes £0/day for a thousand consecutive days with no path back.
+
+**`Remaining` is never clamped**; `deficit` is reported alongside it. The `max(0, …)` clamp lives
+strictly inside the allowance expression.
+
+**Allowance floors to pence, not pounds** (`ROUND_FLOOR`, never `//` on `Decimal`). Whole-pound
+flooring strands £12 of a £600 budget.
+
+**`days_remaining` is `None` for a closed period, never 0.** The literal rulebook formula divides
+by zero the day after any period ends and goes negative after that.
+
+**§8's claim that overspend reduces safe-to-spend is deleted as false.** §4 has no budget term and
+gains none — the overspent cash already left `Cash`, so subtracting it again double-counts (an
+S1-shaped defect). The two figures are reconciled by capping the *presented* allowance at what cash
+supports, never by adding a term to §4.
+
 ## Open, and worth deciding before Phase 5
 
 - **Hosting and auth (Q23).** Local-only is fine now, but §14 of the plan lists HTTPS and

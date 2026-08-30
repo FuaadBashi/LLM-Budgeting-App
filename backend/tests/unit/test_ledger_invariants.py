@@ -185,6 +185,59 @@ def test_classification_is_derived_from_account_kinds(
     assert classify(txn, kinds_map(accounts)) is expected
 
 
+def test_credit_card_spending_is_an_expense_not_a_debt_movement(session, accounts):
+    """Buying groceries on a card is spending, however it was funded.
+
+    The liability grows rather than shrinks, which is what distinguishes it from
+    a repayment. Classifying on the mere presence of a liability account made
+    every card purchase 'unclassified'.
+    """
+    txn = post(
+        session,
+        TODAY,
+        "Tesco on the card",
+        [(accounts["loan"], "-45.00"), (accounts["groceries"], "45.00")],
+    )
+    assert classify(txn, kinds_map(accounts)) is TransactionClass.EXPENSE
+
+
+def test_credit_card_refund_is_a_refund_not_a_debt_payment(session, accounts):
+    """The mirror case: the liability shrinks, but nothing was repaid."""
+    txn = post(
+        session,
+        TODAY,
+        "Returned coat",
+        [(accounts["loan"], "45.00"), (accounts["groceries"], "-45.00")],
+    )
+    assert classify(txn, kinds_map(accounts)) is TransactionClass.REFUND
+
+
+def test_debt_payment_still_wins_over_its_interest_leg(session, accounts):
+    """A repayment carries an interest expense; it must not read as an expense."""
+    txn = post(
+        session,
+        TODAY,
+        "Car loan payment",
+        [
+            (accounts["current"], "-300.00"),
+            (accounts["loan"], "250.00"),
+            (accounts["interest"], "50.00"),
+        ],
+    )
+    assert classify(txn, kinds_map(accounts)) is TransactionClass.DEBT_PAYMENT
+
+
+def test_pure_borrowing_stays_unclassified(session, accounts):
+    """Drawing down a loan with nothing bought. v1 does not model this."""
+    txn = post(
+        session,
+        TODAY,
+        "Loan drawdown",
+        [(accounts["current"], "1000.00"), (accounts["loan"], "-1000.00")],
+    )
+    assert classify(txn, kinds_map(accounts)) is TransactionClass.UNCLASSIFIED
+
+
 def test_savings_and_plain_transfers_differ_only_by_destination_account_kind(
     session, accounts
 ):

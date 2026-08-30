@@ -35,16 +35,27 @@ def classify(txn: Transaction, kinds: dict) -> TransactionClass:
             return TransactionClass.REIMBURSEMENT
         return TransactionClass.INCOME
 
+    expense_net = by_kind.get(AccountKind.EXPENSE, Decimal("0"))
+
     if AccountKind.LIABILITY in touched:
-        # Reducing a liability is a debt payment; increasing it is borrowing,
-        # which v1 records as unclassified rather than guessing.
+        # Neither the presence of a liability nor its direction is enough on its
+        # own -- a repayment and a card refund both shrink the liability. What
+        # separates them is the sign of the expense leg: interest on a repayment
+        # is incurred (positive), whereas a refund reverses spending (negative).
         if by_kind[AccountKind.LIABILITY] > 0:
+            if expense_net < 0:
+                return TransactionClass.REFUND
             return TransactionClass.DEBT_PAYMENT
-        return TransactionClass.UNCLASSIFIED
+
+        # Liability growing: it funded something. If that something is an expense,
+        # it is still spending -- groceries bought on a credit card are an expense,
+        # not a species of borrowing -- so fall through rather than swallow it.
+        if AccountKind.EXPENSE not in touched:
+            # Pure drawdown with nothing bought. v1 does not model borrowing.
+            return TransactionClass.UNCLASSIFIED
 
     if AccountKind.EXPENSE in touched:
-        net = by_kind[AccountKind.EXPENSE]
-        if net < 0:
+        if expense_net < 0:
             return TransactionClass.REFUND
         return TransactionClass.EXPENSE
 

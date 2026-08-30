@@ -143,17 +143,37 @@ def near_term_committed(session: Session, today: date, window_end: date) -> Deci
     return total or ZERO
 
 
-def remaining_planned_contributions(session: Session, today: date) -> Decimal:
-    """Planned contributions not yet made this period.
+@dataclass(frozen=True)
+class PlannedSplit:
+    """Outstanding planned contributions, split by whether the goal is protected."""
+
+    protected: Decimal
+    flexible: Decimal
+    per_goal: dict
+
+    @property
+    def total(self) -> Decimal:
+        return self.protected + self.flexible
+
+
+def planned_contributions_split(session: Session, today: date) -> PlannedSplit:
+    """Planned contributions not yet made this period, split by protection.
 
     Invariant S1. The subtraction is ``max(0, planned - contributed)``, never the
     bare planned amount: once the transfer is posted the money is already out of
     cash, and subtracting the plan again would understate safe-to-spend for the
     rest of the month, every month.
+
+    This is the **only** implementation of that clamp. Safe-to-spend needs the
+    total and the recovery engine needs the split; computing them separately in
+    two places guarantees they eventually disagree.
     """
     period_start = today.replace(day=1)
 
-    total = ZERO
+    protected = ZERO
+    flexible = ZERO
+    per_goal: dict = {}
+
     for goal in session.scalars(select(SavingsGoal).where(SavingsGoal.active.is_(True))):
         contributed = session.scalar(
             select(func.coalesce(func.sum(GoalContribution.amount), ZERO))
@@ -161,10 +181,21 @@ def remaining_planned_contributions(session: Session, today: date) -> Decimal:
             .where(GoalContribution.booking_date >= period_start)
             .where(GoalContribution.booking_date <= today)
         ) or ZERO
-        outstanding = goal.planned_contribution - contributed
-        if outstanding > ZERO:
-            total += outstanding
-    return total
+        outstanding = max(ZERO, goal.planned_contribution - contributed)
+        if outstanding == ZERO:
+            continue
+        per_goal[goal.id] = outstanding
+        if goal.protected:
+            protected += outstanding
+        else:
+            flexible += outstanding
+
+    return PlannedSplit(protected=protected, flexible=flexible, per_goal=per_goal)
+
+
+def remaining_planned_contributions(session: Session, today: date) -> Decimal:
+    """Total outstanding planned contributions. See :func:`planned_contributions_split`."""
+    return planned_contributions_split(session, today).total
 
 
 def compute_safe_to_spend(session: Session, today: date | None = None) -> SafeToSpend:

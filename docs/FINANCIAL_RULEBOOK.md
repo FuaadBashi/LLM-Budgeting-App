@@ -37,8 +37,20 @@ Enforced by database constraint, not by application code.
 **Invariant L2:** every posting references exactly one account.
 A transaction has at least two postings; a single leg can never balance.
 
-**Invariant L3:** posted transactions are never destructively deleted. Corrections are made by
-voiding (a reversing transaction) or by an edit that records audit metadata.
+**Invariant L3:** posted transactions are never destructively deleted, and exactly **one**
+correction mechanism applies to any given transaction:
+
+| Mechanism | Meaning | Effect |
+|---|---|---|
+| `status = VOIDED` | The transaction should never have existed — a data-entry error. | Excluded wholesale by the status filter. No contra postings. |
+| `reverses_id` | The transaction really happened and is being contra-posted. | Original stays `POSTED`; the pair nets to zero. |
+
+Applying both removes the money **twice** — the status filter drops the original *and* the
+reversal subtracts it again. A £600 correction moved the balance by £600 instead of zero.
+Mutual exclusion is enforced by a deferred database trigger, not by convention.
+
+An edit in place is permitted only for non-monetary fields (description, merchant, category)
+and records audit metadata. Changing an amount is a reversal, never an edit.
 
 ### Account kinds
 

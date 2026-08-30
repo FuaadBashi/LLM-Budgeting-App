@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,7 +12,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
-from app.models import Account, AccountKind, Posting, Transaction
+from app.models import (
+    Account,
+    AccountKind,
+    Category,
+    CategoryNature,
+    Posting,
+    Transaction,
+)
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,23 +91,39 @@ def post(
     session: Session,
     when: date,
     description: str,
-    legs: list[tuple[Account, str]],
+    legs: list[tuple],
     *,
     commit: bool = True,
     **kwargs,
 ) -> Transaction:
-    """Create a transaction from (account, amount) legs.
+    """Create a transaction from ``(account, amount)`` or ``(account, amount, category)``.
 
     Amounts are strings so they become exact Decimals -- never floats.
+
+    The optional third element matters: without a way to set ``Posting.category_id``
+    every fixture transaction is uncategorised, so a category-scoped budget would
+    measure exactly zero against the whole suite and its tests would pass while
+    asserting nothing.
     """
     txn = Transaction(
-        occurred_at=datetime.combine(when, datetime.min.time(), tzinfo=timezone.utc),
+        # Local noon, not UTC midnight. Midnight round-trips to the previous day
+        # in every negative UTC offset, so occurred_at and booking_date would
+        # disagree about which day the transaction happened on.
+        occurred_at=datetime.combine(when, time(12, 0), tzinfo=timezone.utc),
         booking_date=when,
         description=description,
         **kwargs,
     )
-    for account, amount in legs:
-        txn.postings.append(Posting(account=account, amount=Decimal(amount)))
+    for leg in legs:
+        account, amount, *rest = leg
+        category = rest[0] if rest else None
+        txn.postings.append(
+            Posting(
+                account=account,
+                amount=Decimal(amount),
+                category_id=category.id if category is not None else None,
+            )
+        )
     session.add(txn)
     if commit:
         session.commit()
@@ -121,3 +144,20 @@ def accounts(session) -> dict:
         "groceries": make_account(session, "Groceries", AccountKind.EXPENSE),
         "interest": make_account(session, "Loan Interest", AccountKind.EXPENSE),
     }
+
+
+@pytest.fixture
+def categories(session) -> dict:
+    """A small taxonomy with a parent, so subtree scoping is exercised."""
+    food = Category(name="Food", nature=CategoryNature.DISCRETIONARY)
+    session.add(food)
+    session.flush()
+    groceries = Category(name="Groceries", parent_id=food.id,
+                         nature=CategoryNature.DISCRETIONARY)
+    restaurants = Category(name="Restaurants", parent_id=food.id,
+                           nature=CategoryNature.DISCRETIONARY)
+    rent = Category(name="Rent", nature=CategoryNature.ESSENTIAL)
+    session.add_all([groceries, restaurants, rent])
+    session.flush()
+    return {"food": food, "groceries": groceries,
+            "restaurants": restaurants, "rent": rent}
