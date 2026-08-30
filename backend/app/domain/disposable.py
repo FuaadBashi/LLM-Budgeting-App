@@ -17,6 +17,7 @@ from decimal import Decimal
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.domain.clock import today as clock_today
 from app.models.enums import ASSET_KINDS, LIQUID_KINDS, AccountKind
 from app.models.ledger import Account, Posting, Transaction, TransactionStatus
 from app.models.planning import (
@@ -168,7 +169,8 @@ def remaining_planned_contributions(session: Session, today: date) -> Decimal:
 
 def compute_safe_to_spend(session: Session, today: date | None = None) -> SafeToSpend:
     """The headline dashboard figure, with its components (rulebook section 4)."""
-    today = today or date.today()
+    # Invariant D1: "today" is a reporting-timezone question, not a server one.
+    today = today or clock_today(session)
     balances = account_balances(session, today)
 
     cash = ZERO

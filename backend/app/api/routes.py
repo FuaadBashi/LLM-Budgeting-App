@@ -28,6 +28,7 @@ from app.api.schemas import (
 )
 from app.db import get_session
 from app.domain.classification import classify
+from app.domain.clock import today as clock_today
 from app.domain.disposable import account_balances, compute_safe_to_spend, net_worth
 from app.models import Account, Posting, Transaction
 
@@ -175,5 +176,5 @@ def safe_to_spend(
 def get_net_worth(
     as_of: date | None = None, session: Session = Depends(get_session)
 ) -> NetWorthOut:
-    as_of = as_of or date.today()
+    as_of = as_of or clock_today(session)
     return NetWorthOut(net_worth_minor=to_minor(net_worth(session, as_of)), as_of=as_of)
