@@ -146,8 +146,11 @@ def main() -> None:
             SavingsGoal(name="Holiday", target_amount=Decimal("2000"),
                         target_date=date(2027, 6, 1), priority=GoalPriority.OPTIONAL,
                         planned_contribution=Decimal("150")),
+            # Salary recurs too -- without a rule the projected curve shows rent
+            # every month against a single payday and slides downhill forever.
             ExpectedIncome(name="Salary", amount=Decimal("2500"),
-                           next_expected_date=date(2026, 9, 1)),
+                           next_expected_date=date(2026, 9, 1),
+                           rrule=build_rule(Frequency.MONTHLY, date(2026, 9, 1))),
         ])
 
         # Rent is a recurring commitment, not just a past transaction: the

@@ -84,6 +84,33 @@ export interface Recovery {
   breakdown: [string, Minor][];
 }
 
+export interface CalendarEvent {
+  kind: "income" | "obligation";
+  name: string;
+  amount_minor: Minor;
+}
+
+export interface CalendarDay {
+  day: string;
+  events: CalendarEvent[];
+  closing_balance_minor: Minor;
+  below_buffer: boolean;
+}
+
+export interface FinancialCalendar {
+  start: string;
+  end: string;
+  opening_balance_minor: Minor;
+  protected_buffer_minor: Minor;
+  trough_date: string | null;
+  trough_balance_minor: Minor | null;
+  /** The first day the buffer is breached, if any. */
+  first_breach_date: string | null;
+  /** The largest outflow on that day -- the payment worth acting on. */
+  first_breach_cause: string | null;
+  days: CalendarDay[];
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`${path} responded ${res.status}`);
@@ -94,3 +121,11 @@ export const getSafeToSpend = () => get<SafeToSpend>("/dashboard/safe-to-spend")
 export const getAccounts = () => get<Account[]>("/accounts");
 export const getBudgets = () => get<BudgetPeriod[]>("/dashboard/budgets");
 export const getRecovery = () => get<Recovery>("/dashboard/recovery");
+export const getCalendar = () =>
+  get<FinancialCalendar>("/dashboard/calendar?until=" + horizon());
+
+function horizon(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 90);
+  return d.toISOString().slice(0, 10);
+}

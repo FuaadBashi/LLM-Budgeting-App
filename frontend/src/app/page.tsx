@@ -1,11 +1,14 @@
+import { BalanceCurve } from "@/components/BalanceCurve";
 import { BudgetCard } from "@/components/BudgetCard";
 import {
   getAccounts,
   getBudgets,
+  getCalendar,
   getRecovery,
   getSafeToSpend,
   type Account,
   type BudgetPeriod,
+  type FinancialCalendar,
   type Recovery,
   type SafeToSpend,
 } from "@/lib/api";
@@ -25,14 +28,16 @@ export default async function Dashboard() {
   let accounts: Account[] = [];
   let budgets: BudgetPeriod[] = [];
   let recovery: Recovery | null = null;
+  let calendar: FinancialCalendar | null = null;
   let error: string | null = null;
 
   try {
-    [sts, accounts, budgets, recovery] = await Promise.all([
+    [sts, accounts, budgets, recovery, calendar] = await Promise.all([
       getSafeToSpend(),
       getAccounts(),
       getBudgets(),
       getRecovery(),
+      getCalendar(),
     ]);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
@@ -215,6 +220,122 @@ export default async function Dashboard() {
           </div>
         </dl>
       </section>
+
+
+      {calendar && (
+        <section>
+          <h2
+            className="mb-3 text-sm font-medium"
+            style={{ color: "var(--text-muted)" }}
+          >
+            Projected balance
+          </h2>
+          <div
+            className="rounded-xl p-5"
+            style={{
+              background: "var(--surface-1)",
+              boxShadow: "inset 0 0 0 1px var(--hairline)",
+            }}
+          >
+            {calendar.first_breach_date ? (
+              /* Plan section 7.4: the useful warning is not "bill due" but which
+                 payment takes you under, and when. */
+              <p
+                className="mb-4 text-sm"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                <span aria-hidden style={{ color: "var(--status-critical)" }}>
+                  ✕
+                </span>{" "}
+                {calendar.first_breach_cause ?? "A committed payment"} on{" "}
+                {calendar.first_breach_date} takes projected cash below your{" "}
+                {formatMinor(calendar.protected_buffer_minor)} buffer.
+                {calendar.trough_balance_minor !== null && (
+                  <>
+                    {" "}
+                    Lowest point{" "}
+                    <span className="tnum">
+                      {formatMinor(calendar.trough_balance_minor)}
+                    </span>{" "}
+                    on {calendar.trough_date}.
+                  </>
+                )}
+              </p>
+            ) : (
+              <p
+                className="mb-4 text-sm"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                <span aria-hidden style={{ color: "var(--status-good)" }}>
+                  ✓
+                </span>{" "}
+                Committed payments stay above your{" "}
+                {formatMinor(calendar.protected_buffer_minor)} buffer for the
+                next 90 days.
+                {calendar.trough_balance_minor !== null && (
+                  <>
+                    {" "}
+                    Lowest point{" "}
+                    <span className="tnum">
+                      {formatMinor(calendar.trough_balance_minor)}
+                    </span>{" "}
+                    on {calendar.trough_date}.
+                  </>
+                )}
+              </p>
+            )}
+
+            <BalanceCurve
+              days={calendar.days}
+              bufferMinor={calendar.protected_buffer_minor}
+              troughDate={calendar.trough_date}
+            />
+
+            <details className="mt-4">
+              <summary
+                className="cursor-pointer text-xs"
+                style={{ color: "var(--text-muted)" }}
+              >
+                Upcoming payments and income
+              </summary>
+              <table className="mt-2 w-full text-sm">
+                <tbody>
+                  {calendar.days
+                    .filter((d) => d.events.length > 0)
+                    .flatMap((d) =>
+                      d.events.map((e, i) => (
+                        <tr key={`${d.day}-${i}`}>
+                          <td className="py-1" style={{ color: "var(--text-muted)" }}>
+                            {d.day}
+                          </td>
+                          <td className="py-1" style={{ color: "var(--text-secondary)" }}>
+                            {e.name}
+                          </td>
+                          <td
+                            className="tnum py-1 text-right"
+                            style={{ color: "var(--text-primary)" }}
+                          >
+                            {formatSignedMinor(e.amount_minor)}
+                          </td>
+                          <td
+                            className="tnum py-1 text-right"
+                            style={{
+                              color: d.below_buffer
+                                ? "var(--status-critical)"
+                                : "var(--text-muted)",
+                            }}
+                          >
+                            {formatMinor(d.closing_balance_minor)}
+                          </td>
+                        </tr>
+                      )),
+                    )}
+                </tbody>
+              </table>
+            </details>
+          </div>
+        </section>
+      )}
 
       <section>
         <h2

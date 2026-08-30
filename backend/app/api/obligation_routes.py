@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import from_minor, to_minor
 from app.db import get_session
+from app.domain import calendar as cal
 from app.domain.clock import today as clock_today
 from app.domain.obligations import generate_instances, match_instances
 from app.domain.recurrence import Frequency, build_rule
@@ -196,4 +197,71 @@ def confirm_match(
         fulfilled=inst.fulfilled,
         fulfilled_by_transaction_id=inst.fulfilled_by_transaction_id,
         match_confirmed=inst.match_confirmed,
+    )
+
+
+# --------------------------------------------------------------------------
+# Projected balance calendar (plan section 7.4)
+# --------------------------------------------------------------------------
+
+
+class CalendarEventOut(BaseModel):
+    kind: str
+    name: str
+    amount_minor: int
+
+
+class CalendarDayOut(BaseModel):
+    day: date
+    events: list[CalendarEventOut]
+    closing_balance_minor: int
+    below_buffer: bool
+
+
+class CalendarOut(BaseModel):
+    start: date
+    end: date
+    opening_balance_minor: int
+    protected_buffer_minor: int
+    trough_date: date | None
+    trough_balance_minor: int | None
+    first_breach_date: date | None
+    first_breach_cause: str | None
+    days: list[CalendarDayOut]
+
+
+@router.get("/dashboard/calendar", response_model=CalendarOut)
+def calendar(
+    until: date | None = None,
+    as_of: date | None = None,
+    session: Session = Depends(get_session),
+) -> CalendarOut:
+    """Committed-flows-only balance curve. Assumes zero discretionary spending."""
+    today = as_of or clock_today(session)
+    c = cal.build(session, today, until)
+    return CalendarOut(
+        start=c.start,
+        end=c.end,
+        opening_balance_minor=to_minor(c.opening_balance),
+        protected_buffer_minor=to_minor(c.protected_buffer),
+        trough_date=c.trough_date,
+        trough_balance_minor=(
+            to_minor(c.trough_balance) if c.trough_balance is not None else None
+        ),
+        first_breach_date=c.first_breach_date,
+        first_breach_cause=c.first_breach_cause,
+        days=[
+            CalendarDayOut(
+                day=d.day,
+                events=[
+                    CalendarEventOut(
+                        kind=e.kind, name=e.name, amount_minor=to_minor(e.amount)
+                    )
+                    for e in d.events
+                ],
+                closing_balance_minor=to_minor(d.closing_balance),
+                below_buffer=d.below_buffer,
+            )
+            for d in c.days
+        ],
     )
