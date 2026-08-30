@@ -128,5 +128,8 @@ class RecoveryOut(BaseModel):
     gap_minor: int
     recovery_impossible: bool
     protected_shortfall_minor: int
+    planned_total_minor: int
+    already_contributed_minor: int
+    projected_contribution_total_minor: int
     flexible_sacrificed: list[GoalSacrificeOut]
     breakdown: list[tuple[str, int]]

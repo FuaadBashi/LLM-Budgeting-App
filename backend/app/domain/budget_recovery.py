@@ -71,6 +71,10 @@ class Recovery:
     gap: Decimal
     recovery_impossible: bool
     protected_shortfall: Decimal
+    #: What the plan asks for this period, and what is projected to survive it.
+    planned_total: Decimal = ZERO
+    already_contributed: Decimal = ZERO
+    projected_contribution_total: Decimal = ZERO
     flexible_sacrificed: list = field(default_factory=list)
 
     def explain(self) -> list[tuple[str, Decimal]]:
@@ -139,6 +143,15 @@ def assess(session: Session, today: date) -> Recovery:
 
     sacrifices = _sacrifice(session, split, gap)
 
+    # Month-end savings as projected, not as planned: what has already gone in,
+    # plus what is still owed, less whatever the gap forces us to give up.
+    planned_total = ZERO
+    for goal in session.scalars(select(SavingsGoal).where(SavingsGoal.active.is_(True))):
+        planned_total += goal.planned_contribution
+    already = planned_total - split.protected - split.flexible
+    surrendered = sum((s.sacrificed for s in sacrifices), ZERO)
+    projected_total = max(ZERO, planned_total - surrendered)
+
     # Only a cut to a *protected* goal counts as impossible. Trimming flexible
     # goals is ordinary recovery, reported separately.
     protected_shortfall = max(ZERO, gap - split.flexible)
@@ -155,6 +168,9 @@ def assess(session: Session, today: date) -> Recovery:
         gap=gap,
         recovery_impossible=protected_shortfall > ZERO,
         protected_shortfall=protected_shortfall,
+        planned_total=planned_total,
+        already_contributed=already,
+        projected_contribution_total=projected_total,
         flexible_sacrificed=sacrifices,
     )
 

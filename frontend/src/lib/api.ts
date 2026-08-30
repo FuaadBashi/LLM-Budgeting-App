@@ -80,8 +80,17 @@ export interface Recovery {
   gap_minor: Minor;
   recovery_impossible: boolean;
   protected_shortfall_minor: Minor;
+  /** What the plan asks for, and what is projected to survive it. */
+  planned_total_minor: Minor;
+  already_contributed_minor: Minor;
+  projected_contribution_total_minor: Minor;
   flexible_sacrificed: GoalSacrifice[];
   breakdown: [string, Minor][];
+}
+
+export interface NetWorth {
+  net_worth_minor: Minor;
+  as_of: string;
 }
 
 export interface CalendarEvent {
@@ -121,6 +130,7 @@ export const getSafeToSpend = () => get<SafeToSpend>("/dashboard/safe-to-spend")
 export const getAccounts = () => get<Account[]>("/accounts");
 export const getBudgets = () => get<BudgetPeriod[]>("/dashboard/budgets");
 export const getRecovery = () => get<Recovery>("/dashboard/recovery");
+export const getNetWorth = () => get<NetWorth>("/dashboard/net-worth");
 export const getCalendar = () =>
   get<FinancialCalendar>("/dashboard/calendar?until=" + horizon());
 

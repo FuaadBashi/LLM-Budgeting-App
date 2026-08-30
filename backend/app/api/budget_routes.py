@@ -242,6 +242,9 @@ def recovery(
         gap_minor=to_minor(r.gap),
         recovery_impossible=r.recovery_impossible,
         protected_shortfall_minor=to_minor(r.protected_shortfall),
+        planned_total_minor=to_minor(r.planned_total),
+        already_contributed_minor=to_minor(r.already_contributed),
+        projected_contribution_total_minor=to_minor(r.projected_contribution_total),
         flexible_sacrificed=[
             GoalSacrificeOut(
                 goal_id=s.goal_id,

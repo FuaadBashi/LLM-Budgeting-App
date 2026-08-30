@@ -47,10 +47,16 @@ export function BalanceCurve({
   if (days.length < 2) return null;
 
   const values = days.map((d) => d.closing_balance_minor);
-  // The buffer is always in frame: a threshold you cannot see cannot be read
-  // against, and off-scale it silently stops meaning anything.
-  const lo = Math.min(...values, bufferMinor, 0);
-  const hi = Math.max(...values, bufferMinor);
+  // The buffer is always in frame -- a threshold you cannot see cannot be read
+  // against, and off-scale it silently stops meaning anything. But the domain is
+  // NOT forced down to zero: with a £200 buffer under a £3k–£8k balance, doing
+  // that spends half the plot on empty space and flattens the variation that
+  // the panel exists to show.
+  const rawLo = Math.min(...values, bufferMinor);
+  const rawHi = Math.max(...values, bufferMinor);
+  const headroom = (rawHi - rawLo || Math.abs(rawHi) || 1) * 0.12;
+  const lo = rawLo - headroom;
+  const hi = rawHi + headroom;
   const span = hi - lo || 1;
 
   const x = (i: number) => PAD.left + (i / (days.length - 1)) * PLOT_W;
@@ -93,11 +99,15 @@ export function BalanceCurve({
           </clipPath>
         </defs>
 
-        {/* Area under the curve that falls below the buffer, tinted as a breach. */}
+        {/* The breach region: the area between the curve and the buffer, kept only
+            where the curve is below it. The polygon must close on the BUFFER line,
+            not the plot floor -- closing at the floor and clipping below the
+            buffer paints the whole strip red whenever the floor sits under the
+            buffer, regardless of where the curve actually goes. */}
         <polygon
-          points={`${PAD.left},${PAD.top + PLOT_H} ${line} ${PAD.left + PLOT_W},${PAD.top + PLOT_H}`}
+          points={`${PAD.left},${bufferY} ${line} ${PAD.left + PLOT_W},${bufferY}`}
           fill="var(--status-critical)"
-          opacity="0.16"
+          opacity="0.18"
           clipPath={`url(#${clipId}-below)`}
         />
 
@@ -146,17 +156,21 @@ export function BalanceCurve({
           </text>
         ))}
 
-        {/* Only the maximum is labelled. The minimum is zero by construction and
-            says nothing, and printing it puts a label where the buffer lives. */}
-        <text
-          x={PAD.left - 8}
-          y={y(hi) + 4}
-          textAnchor="end"
-          fontSize="10"
-          fill="var(--text-muted)"
-        >
-          {formatMinor(hi)}
-        </text>
+        {/* The observed extremes, not the padded domain edges -- a tick that no
+            data point reaches is a number the reader cannot locate. The low tick
+            is dropped when it IS the buffer, which carries its own label. */}
+        {(rawLo === bufferMinor ? [rawHi] : [rawHi, rawLo]).map((v) => (
+          <text
+            key={v}
+            x={PAD.left - 8}
+            y={y(v) + 4}
+            textAnchor="end"
+            fontSize="10"
+            fill="var(--text-muted)"
+          >
+            {formatMinor(v)}
+          </text>
+        ))}
 
         <polyline
           points={line}
