@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+
+# Node
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# macOS
+.DS_Store
