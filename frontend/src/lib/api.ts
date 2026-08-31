@@ -145,8 +145,10 @@ export interface PeriodSummary {
   expense_minor: Minor;
   saved_minor: Minor;
   net_minor: Minor;
-  /** Null when there was no income -- not the same as zero. */
+  /** (income − spending) / income. Null when there was no income. */
   savings_rate: number | null;
+  /** Deliberately moved to savings, as a share of income. A different question. */
+  set_aside_rate: number | null;
   by_category: CategoryTotal[];
   by_merchant: [string, Minor][];
 }

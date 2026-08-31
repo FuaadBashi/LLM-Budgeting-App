@@ -27,6 +27,7 @@ from app.domain import restore as restore_module
 from app.domain.clock import today as clock_today
 from app.domain.ledger_scope import posted_transaction_ids
 from app.models import Account, Category, Posting, Transaction
+from app.models.enums import LIQUID_KINDS, AccountKind
 
 router = APIRouter()
 
@@ -43,8 +44,10 @@ class PeriodSummaryOut(BaseModel):
     expense_minor: int
     saved_minor: int
     net_minor: int
-    #: None when there was no income -- "0% saved" and "no income" differ.
+    #: (income - spending) / income. None when there was no income.
     savings_rate: float | None
+    #: Deliberately moved to savings or investments, as a share of income.
+    set_aside_rate: float | None
     by_category: list[CategoryTotalOut]
     by_merchant: list[tuple[str, int]]
 
@@ -58,6 +61,7 @@ def _summary_out(s: analytics.PeriodSummary) -> PeriodSummaryOut:
         saved_minor=to_minor(s.saved),
         net_minor=to_minor(s.net),
         savings_rate=float(s.savings_rate) if s.savings_rate is not None else None,
+        set_aside_rate=float(s.set_aside_rate) if s.set_aside_rate is not None else None,
         by_category=[
             CategoryTotalOut(name=c.name, amount_minor=to_minor(c.amount))
             for c in s.by_category
@@ -155,6 +159,74 @@ def export_csv(
         media_type="text/csv",
         headers={
             "Content-Disposition": f'attachment; filename="transactions-{start}-{end}.csv"'
+        },
+    )
+
+
+@router.get("/export/summary.csv")
+def export_simple_csv(
+    start: date | None = None,
+    end: date | None = None,
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """One row per transaction, for spreadsheets. Plan section 10's "simple
+    interoperability" case.
+
+    This view is lossy by construction: a transaction split across two categories
+    collapses to one row, and its `amount` is the net movement across liquid
+    accounts, which is zero for a card purchase. transactions.csv is the
+    canonical export; this one is for pasting into a spreadsheet.
+    """
+    today = clock_today(session)
+    start = start or date(today.year, 1, 1)
+    end = end or today
+
+    liquid = {
+        a.id for a in session.scalars(select(Account)) if a.kind in LIQUID_KINDS
+    }
+    grouped: dict[str, dict] = {}
+    for txn, posting, account, category in _rows(session, start, end):
+        row = grouped.setdefault(
+            str(txn.id),
+            {
+                "booking_date": txn.booking_date.isoformat(),
+                "description": txn.description,
+                "merchant": txn.merchant or "",
+                "categories": set(),
+                "cash_amount": Decimal("0"),
+                "expense_amount": Decimal("0"),
+            },
+        )
+        if category is not None:
+            row["categories"].add(category.name)
+        if posting.account_id in liquid:
+            row["cash_amount"] += posting.amount
+        if account.kind == AccountKind.EXPENSE:
+            row["expense_amount"] += posting.amount
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["booking_date", "description", "merchant", "categories",
+         "cash_amount", "expense_amount", "currency"]
+    )
+    for row in sorted(grouped.values(), key=lambda r: r["booking_date"]):
+        writer.writerow([
+            row["booking_date"],
+            row["description"],
+            row["merchant"],
+            "; ".join(sorted(row["categories"])),
+            str(row["cash_amount"]),
+            str(row["expense_amount"]),
+            "GBP",
+        ])
+
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="summary-{start}-{end}.csv"'
         },
     )
 

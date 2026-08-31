@@ -5,10 +5,22 @@ is computed a second way: the exit gate for this phase is that report numbers
 reconcile to the ledger, which is only meaningful if the report and the ledger
 read the same rows. Both go through ``posted_transaction_ids``.
 
-Savings rate is deliberately *not* "income minus expenses". Money moved to a
-savings account is not spending and not income -- it is a transfer, and counting
-it either way would make the rate a statement about account plumbing rather than
-about behaviour.
+Two rates, because they answer different questions and neither is a substitute
+for the other:
+
+* **savings rate** -- ``(income - spending) / income``. The standard household
+  definition used by national statistics offices and personal finance generally:
+  what fraction of income was not consumed. Money left sitting in a current
+  account counts, because it was in fact not spent.
+* **set-aside rate** -- ``(moved to savings and investments) / income``. What was
+  deliberately put beyond easy reach. Zero for someone who simply underspends.
+
+Reporting only the second was the earlier mistake: it told a careful saver with
+no separate savings account that they saved nothing.
+
+Either way a transfer is not spending and not income. That part is not a
+convention -- under double entry, moving money between your own accounts touches
+no nominal account at all.
 """
 
 from __future__ import annotations
@@ -44,7 +56,10 @@ class PeriodSummary:
     #: Money moved into savings or investment accounts. A transfer, not spending.
     saved: Decimal
     net: Decimal
+    #: (income - spending) / income. The standard definition.
     savings_rate: Decimal | None
+    #: Deliberately moved to savings or investments, as a share of income.
+    set_aside_rate: Decimal | None
     by_category: list[CategoryTotal] = field(default_factory=list)
     by_merchant: list[tuple[str, Decimal]] = field(default_factory=list)
 
@@ -78,9 +93,10 @@ def summarise(session: Session, start: date, end: date) -> PeriodSummary:
     for kind in (AccountKind.SAVINGS, AccountKind.INVESTMENT):
         saved += _sum_over_kind(session, kind, start, end)
 
-    # Rate of income actually put aside. Undefined without income rather than
-    # zero: "0% saved" and "no income this period" are different statements.
-    savings_rate = (saved / income) if income > ZERO else None
+    # Undefined without income rather than zero: "saved 0%" and "no income this
+    # period" are different statements and must not render the same.
+    savings_rate = ((income - expense) / income) if income > ZERO else None
+    set_aside_rate = (saved / income) if income > ZERO else None
 
     return PeriodSummary(
         start=start,
@@ -90,6 +106,7 @@ def summarise(session: Session, start: date, end: date) -> PeriodSummary:
         saved=saved,
         net=income - expense,
         savings_rate=savings_rate,
+        set_aside_rate=set_aside_rate,
         by_category=_by_category(session, start, end),
         by_merchant=_by_merchant(session, start, end),
     )

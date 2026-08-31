@@ -86,15 +86,46 @@ def test_saving_is_a_transfer_not_spending(session, month):
 
 
 def test_savings_rate_is_none_without_income(session, accounts):
-    """Not zero: "0% saved" and "no income this period" are different claims."""
+    """Not zero: "saved 0%" and "no income this period" are different claims."""
     post(session, date(2026, 8, 4), "Tesco",
          [(accounts["current"], "-20"), (accounts["groceries"], "20")])
-    assert analytics.summarise(session, START, END).savings_rate is None
-
-
-def test_savings_rate(session, month):
     s = analytics.summarise(session, START, END)
-    assert s.savings_rate == Decimal("500") / Decimal("2500")
+    assert s.savings_rate is None
+    assert s.set_aside_rate is None
+
+
+def test_savings_rate_is_the_standard_definition(session, month):
+    """(income - spending) / income, as national statistics and textbooks define it.
+
+    Income 2500, spending 1387.05, so 44.5% of income was not consumed.
+    """
+    s = analytics.summarise(session, START, END)
+    assert s.savings_rate == (Decimal("2500") - Decimal("1387.05")) / Decimal("2500")
+
+
+def test_set_aside_rate_measures_deliberate_transfers(session, month):
+    """A different question: what was moved beyond easy reach."""
+    s = analytics.summarise(session, START, END)
+    assert s.set_aside_rate == Decimal("500") / Decimal("2500")
+
+
+def test_underspending_without_a_savings_account_still_counts_as_saving(
+    session, accounts
+):
+    """The reason the standard definition is the headline one.
+
+    Earn £1,000, spend £200, move nothing. The set-aside rate is 0% -- correctly,
+    nothing was moved -- but reporting that as the savings rate would tell a
+    careful saver they saved nothing.
+    """
+    post(session, date(2026, 8, 1), "Salary",
+         [(accounts["current"], "1000"), (accounts["salary"], "-1000")])
+    post(session, date(2026, 8, 5), "Tesco",
+         [(accounts["current"], "-200"), (accounts["groceries"], "200")])
+
+    s = analytics.summarise(session, START, END)
+    assert s.savings_rate == Decimal("0.8")
+    assert s.set_aside_rate == Decimal("0")
 
 
 def test_voided_transactions_are_excluded(session, month, accounts):
@@ -201,3 +232,44 @@ def test_analytics_endpoints_are_read_only(client):
     for path, methods in paths.items():
         if "/analytics/" in path or "/export/" in path:
             assert set(methods) <= {"get", "head"}, f"{path} exposes a write method"
+
+
+# --------------------------------------------------------------------------
+# The simple (transaction-level) CSV
+# --------------------------------------------------------------------------
+
+
+def test_simple_csv_is_one_row_per_transaction(client, session, month):
+    body = client.get("/api/export/summary.csv?start=2026-08-01&end=2026-08-31").text
+    rows = list(csv.DictReader(io.StringIO(body)))
+    from sqlalchemy import select
+    from app.models import Transaction
+
+    posted = session.scalars(select(Transaction)).all()
+    assert len(rows) == len(posted)
+
+
+def test_simple_csv_expense_column_reconciles_to_the_summary(client, session, month):
+    """Lossy on splits, but the totals must still agree with the ledger."""
+    body = client.get("/api/export/summary.csv?start=2026-08-01&end=2026-08-31").text
+    rows = list(csv.DictReader(io.StringIO(body)))
+    total = sum((Decimal(r["expense_amount"]) for r in rows), Decimal("0"))
+    assert total == analytics.summarise(session, START, END).expense
+
+
+def test_simple_csv_names_both_categories_of_a_split(client, session, accounts, categories):
+    """A split collapses to one row, so the categories column lists them all
+    rather than silently picking one."""
+    from tests.conftest import make_account
+    from app.models import AccountKind
+
+    household = make_account(session, "Household", AccountKind.EXPENSE)
+    post(session, date(2026, 8, 12), "Mixed shop",
+         [(accounts["current"], "-100"),
+          (accounts["groceries"], "60", categories["groceries"]),
+          (household, "40", categories["rent"])])
+
+    body = client.get("/api/export/summary.csv?start=2026-08-01&end=2026-08-31").text
+    row = next(r for r in csv.DictReader(io.StringIO(body)) if r["description"] == "Mixed shop")
+    assert row["categories"] == "Groceries; Rent"
+    assert Decimal(row["expense_amount"]) == Decimal("100")

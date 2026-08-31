@@ -67,14 +67,9 @@ export default async function AnalyticsPage() {
           <StatTile label="Income" value={period.income_minor} />
           <StatTile label="Spending" value={period.expense_minor} />
           <StatTile
-            label="Saved"
-            value={period.saved_minor}
-            tone={period.saved_minor > 0 ? "good" : "neutral"}
-            support="Moved to savings or investments — a transfer, not spending."
-          />
-          <StatTile
             label="Savings rate"
-            // Null is a distinct state: no income is not the same as 0% saved.
+            // The standard definition: what share of income was not consumed.
+            // Null is a distinct state -- no income is not the same as 0% saved.
             value={
               period.savings_rate === null
                 ? "—"
@@ -85,12 +80,22 @@ export default async function AnalyticsPage() {
                 ? "neutral"
                 : period.savings_rate > 0
                   ? "good"
-                  : "warning"
+                  : "critical"
             }
             support={
               period.savings_rate === null
                 ? "No income recorded this period."
-                : `of ${formatMinor(period.income_minor)} income`
+                : "Share of income not spent."
+            }
+          />
+          <StatTile
+            label="Set aside"
+            value={period.saved_minor}
+            tone={period.saved_minor > 0 ? "good" : "neutral"}
+            support={
+              period.set_aside_rate === null
+                ? "Moved to savings or investments — a transfer, not spending."
+                : `${Math.round(period.set_aside_rate * 100)}% of income, moved deliberately.`
             }
           />
         </section>
@@ -195,6 +200,16 @@ export default async function AnalyticsPage() {
           <h2 className="section-label mb-3">Export</h2>
           <div className="card flex flex-wrap gap-3 p-5">
             <a
+              href={`${API_BASE}/export/summary.csv`}
+              className="rounded-full px-4 py-2 text-sm"
+              style={{
+                color: "var(--text-secondary)",
+                boxShadow: "inset 0 0 0 1px var(--hairline-strong)",
+              }}
+            >
+              Summary (CSV)
+            </a>
+            <a
               href={`${API_BASE}/export/transactions.csv`}
               className="rounded-full px-4 py-2 text-sm"
               style={{
@@ -202,7 +217,7 @@ export default async function AnalyticsPage() {
                 boxShadow: "inset 0 0 0 1px var(--hairline-strong)",
               }}
             >
-              Transactions (CSV)
+              Postings (CSV)
             </a>
             <a
               href={`${API_BASE}/export/backup.json`}
@@ -215,8 +230,9 @@ export default async function AnalyticsPage() {
               Full backup (JSON)
             </a>
             <p className="w-full text-xs" style={{ color: "var(--text-muted)" }}>
-              Exports are posting-level, so every transaction&rsquo;s rows still net
-              to zero. Amounts are exact decimal strings, never floats.
+              Summary is one row per transaction, for spreadsheets — lossy on
+              splits. Postings is the canonical export: every transaction&rsquo;s
+              rows still net to zero. Amounts are exact decimal strings in both.
             </p>
           </div>
         </section>
