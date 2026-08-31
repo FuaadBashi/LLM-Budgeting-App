@@ -89,6 +89,17 @@ class PostingOut(BaseModel):
     category_id: uuid.UUID | None
 
 
+class BudgetImpactOut(BaseModel):
+    """What this transaction did to a budget's daily allowance (warning W3)."""
+
+    budget_id: uuid.UUID
+    budget_name: str
+    allowance_before_minor: int
+    allowance_after_minor: int
+    delta_minor: int
+    material: bool
+
+
 class TransactionOut(BaseModel):
     id: uuid.UUID
     booking_date: date
@@ -96,6 +107,8 @@ class TransactionOut(BaseModel):
     merchant: str | None
     classification: TransactionClass
     postings: list[PostingOut]
+    #: Populated on create. Empty when no budget's allowance moved.
+    budget_impacts: list[BudgetImpactOut] = []
 
 
 class SafeToSpendOut(BaseModel):

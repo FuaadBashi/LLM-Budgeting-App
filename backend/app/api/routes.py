@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import (
     AccountIn,
+    BudgetImpactOut,
     AccountOut,
     CategoryOut,
     NetWorthOut,
@@ -30,6 +31,7 @@ from app.api.schemas import (
 from app.db import get_session
 from app.domain.classification import classify
 from app.domain.clock import today as clock_today
+from app.domain.impact import assess_transaction
 from app.domain.disposable import account_balances, compute_safe_to_spend, net_worth
 from app.models import Account, Category, Posting, Transaction
 
@@ -148,7 +150,21 @@ def create_transaction(
         raise HTTPException(status_code=422, detail=str(exc.orig)) from exc
 
     kinds = {a.id: a.kind for a in session.scalars(select(Account))}
-    return _to_out(txn, kinds)
+    out = _to_out(txn, kinds)
+    # W3: the only place a before/after allowance pair exists. Reported on the
+    # write that caused it rather than surfaced later out of context.
+    out.budget_impacts = [
+        BudgetImpactOut(
+            budget_id=i.budget_id,
+            budget_name=i.budget_name,
+            allowance_before_minor=to_minor(i.allowance_before),
+            allowance_after_minor=to_minor(i.allowance_after),
+            delta_minor=to_minor(i.allowance_before - i.allowance_after),
+            material=i.warning.fired,
+        )
+        for i in assess_transaction(session, txn.id)
+    ]
+    return out
 
 
 @router.get("/transactions", response_model=list[TransactionOut])
