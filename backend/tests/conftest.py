@@ -36,6 +36,7 @@ def _auth_disabled_by_default(monkeypatch):
     Tests that care about auth switch it on themselves.
     """
     monkeypatch.setattr(settings, "auth_password_hash", "")
+    monkeypatch.setattr(settings, "session_secret", "")
 
 
 @pytest.fixture(scope="session")

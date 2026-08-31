@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     #: Empty means authentication is off. Set it with scripts/set_password.py.
     #: The password itself is never stored -- only this hash.
     auth_password_hash: str = ""
+    #: Signs session cookies. Kept separate from the password hash so the hash
+    #: can only verify a password, never mint a session.
+    session_secret: str = ""
     #: Send the session cookie only over HTTPS. Leave false for localhost.
     cookie_secure: bool = False
 

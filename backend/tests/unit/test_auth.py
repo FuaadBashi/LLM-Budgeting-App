@@ -169,3 +169,75 @@ def test_changing_the_password_invalidates_existing_sessions(
 
     monkeypatch.setattr(settings, "auth_password_hash", hash_password("a-different-passphrase"))
     assert secured_client.get("/api/accounts").status_code == 401
+
+
+# --------------------------------------------------------------------------
+# The signing key is not the password hash
+# --------------------------------------------------------------------------
+
+
+def test_sessions_are_signed_with_the_dedicated_secret(monkeypatch):
+    """Holding the password hash must not be enough to mint a session.
+
+    Two configurations with the same password but different SESSION_SECRETs must
+    not accept each other's tokens. If the hash were still the signing key, they
+    would.
+    """
+    from fastapi import Response
+
+    shared_hash = hash_password(PASSWORD)
+
+    monkeypatch.setattr(settings, "auth_password_hash", shared_hash)
+    monkeypatch.setattr(settings, "session_secret", "secret-belonging-to-install-a")
+    token = auth.issue_session(Response())
+    assert auth.session_is_valid(token)
+
+    monkeypatch.setattr(settings, "session_secret", "secret-belonging-to-install-b")
+    assert not auth.session_is_valid(token)
+
+
+def test_changing_the_password_still_revokes_sessions(monkeypatch):
+    """Revocation is preserved without coupling the signing key to the hash.
+
+    The secret is unchanged here, so the signature still verifies -- it is the
+    password fingerprint carried in the token that no longer matches.
+    """
+    from fastapi import Response
+
+    monkeypatch.setattr(settings, "session_secret", "a-stable-session-secret")
+    monkeypatch.setattr(settings, "auth_password_hash", hash_password(PASSWORD))
+    token = auth.issue_session(Response())
+    assert auth.session_is_valid(token)
+
+    monkeypatch.setattr(settings, "auth_password_hash", hash_password("a-new-passphrase"))
+    assert not auth.session_is_valid(token)
+
+
+def test_the_fingerprint_does_not_expose_the_hash(monkeypatch):
+    monkeypatch.setattr(settings, "auth_password_hash", hash_password(PASSWORD))
+    fingerprint = auth.password_fingerprint()
+    assert len(fingerprint) == 16
+    assert fingerprint not in settings.auth_password_hash
+
+
+def test_missing_session_secret_is_flagged_at_startup(monkeypatch):
+    """The fallback keeps an upgraded install working, but it is the weakness
+    this separation removes, so it must announce itself."""
+    monkeypatch.setattr(settings, "auth_password_hash", hash_password(PASSWORD))
+    monkeypatch.setattr(settings, "session_secret", "")
+    assert "SESSION_SECRET is not set" in (auth.session_secret_warning() or "")
+
+
+def test_no_warning_once_a_secret_is_configured(monkeypatch):
+    monkeypatch.setattr(settings, "auth_password_hash", hash_password(PASSWORD))
+    monkeypatch.setattr(settings, "session_secret", "a-stable-session-secret")
+    assert auth.session_secret_warning() is None
+
+
+def test_the_fallback_still_works_for_an_upgraded_install(monkeypatch):
+    """No SESSION_SECRET must not mean nobody can log in."""
+    from fastapi import Response
+
+    monkeypatch.setattr(settings, "auth_password_hash", hash_password(PASSWORD))
+    monkeypatch.setattr(settings, "session_secret", "")
+    assert auth.session_is_valid(auth.issue_session(Response()))

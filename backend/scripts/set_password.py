@@ -8,16 +8,19 @@ there is nothing to copy and nothing to paste anywhere it should not go.
 
 Then restart the API. Changing the password ends every existing session.
 
-Use --print-only if you would rather place the line yourself, but be aware the
-hash is sensitive in its own right: this app derives the session signing key
-from it, so anyone holding it can mint a valid session. Treat it like the
-password, not like a checksum.
+A SESSION_SECRET is generated alongside it if one does not exist. Sessions are
+signed with that, not with the password hash, so the hash can only verify a
+password and never mint a session. An existing secret is left alone -- rotating
+it would sign you out on an unrelated password change.
+
+Use --print-only to place the hash yourself instead.
 """
 
 from __future__ import annotations
 
 import argparse
 import getpass
+import secrets
 import sys
 from pathlib import Path
 
@@ -28,6 +31,7 @@ from app.auth import hash_password  # noqa: E402
 MIN_LENGTH = 12
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 KEY = "AUTH_PASSWORD_HASH"
+SECRET_KEY = "SESSION_SECRET"
 
 
 def read_password() -> str:
@@ -41,12 +45,26 @@ def read_password() -> str:
     return password
 
 
-def write_env(encoded: str) -> None:
-    """Replace the hash line in .env, leaving every other setting alone."""
+def write_env(encoded: str) -> bool:
+    """Replace the hash line in .env, leaving every other setting alone.
+
+    Also generates SESSION_SECRET if it is missing. Sessions are signed with it
+    rather than with the password hash, so the hash can only verify a password
+    and never mint a session. Returns True if a secret was created.
+
+    An existing secret is deliberately left alone: regenerating it would sign
+    every user out on an unrelated password change.
+    """
     existing = ENV_PATH.read_text().splitlines() if ENV_PATH.exists() else []
     kept = [line for line in existing if not line.startswith(f"{KEY}=")]
     kept.append(f"{KEY}={encoded}")
+
+    created = not any(line.startswith(f"{SECRET_KEY}=") for line in kept)
+    if created:
+        kept.append(f"{SECRET_KEY}={secrets.token_urlsafe(48)}")
+
     ENV_PATH.write_text("\n".join(kept) + "\n")
+    return created
 
 
 def main() -> None:
@@ -65,8 +83,10 @@ def main() -> None:
         print("Keep this secret — it can mint a session, not just verify one.")
         return
 
-    write_env(encoded)
+    created_secret = write_env(encoded)
     print(f"\nWritten to {ENV_PATH} (gitignored). The hash was not printed.")
+    if created_secret:
+        print("Also generated SESSION_SECRET, which signs sessions.")
     print("Restart the API. Existing sessions are now invalid.")
 
 

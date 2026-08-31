@@ -11,15 +11,16 @@ from app.api.auth_routes import router as auth_router
 from app.api.export_routes import router as export_router
 from app.api.obligation_routes import router as obligation_router
 from app.api.routes import router
-from app.auth import require_session, startup_warning
+from app.auth import require_session, session_secret_warning, startup_warning
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # The insecure default must announce itself rather than be inferred from
     # the absence of a login screen.
-    message = startup_warning()
-    if message:
-        logging.getLogger("uvicorn.error").warning(message)
+    log = logging.getLogger("uvicorn.error")
+    for message in (startup_warning(), session_secret_warning()):
+        if message:
+            log.warning(message)
     yield
 
 

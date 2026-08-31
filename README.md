@@ -121,11 +121,11 @@ cd backend && ./.venv/bin/python scripts/set_password.py
 ```
 
 It prompts for a password, hashes it, and writes the hash straight into `backend/.env`
-(gitignored). The hash is never printed, so there is nothing to copy. Restart the API afterwards;
-changing the password ends every existing session.
+(gitignored). The hash is never printed, so there is nothing to copy. A `SESSION_SECRET` is
+generated alongside it on first run. Restart the API afterwards; changing the password ends every
+existing session.
 
-The hash is sensitive in its own right — this app currently derives the session signing key from
-it, so it can mint a session rather than only verify a password. Treat it like the password. See
-the security-debt note in `docs/HANDOFF.md`.
+Sessions are signed with the secret rather than the hash, so the hash can only verify a password
+and never mint a session.
 
 Behind a reverse proxy terminating HTTPS, also set `COOKIE_SECURE=true`.
