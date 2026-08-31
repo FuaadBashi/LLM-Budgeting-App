@@ -106,6 +106,18 @@ of it, then set `COOKIE_SECURE=true`. The app logs a loud warning at startup whi
 Backup and restore are done, with a round-trip test asserting balances and net worth survive a
 wipe. There is no *scheduled* backup — running the export is still a manual act.
 
+### Security debt
+
+**The session signing key is derived from the password hash.** `auth.py::_signing_key()` is
+`sha256(AUTH_PASSWORD_HASH + "|session")`, which gives password-change-revokes-sessions for free
+but means the hash is a live credential: anyone holding it can mint a valid session cookie, not
+merely verify a password.
+
+A password hash should only ever be a verifier. The standard fix is a separate `SESSION_SECRET`
+plus a version counter bumped on password change, which keeps the revocation behaviour without
+overloading the hash. Until then, treat `AUTH_PASSWORD_HASH` as being as sensitive as the
+password itself — do not paste it anywhere.
+
 ### Correctness debt
 
 None outstanding. Reimbursement netting, W3 wiring and the expected-income drift are all closed,
@@ -161,6 +173,8 @@ These are bugs already found and fixed. They will come back if the reasoning is 
   value and the two states must stay distinguishable.
 - **Elapsed + remaining = total + 1.** Today counts in both. Deriving one from the other is off
   by one every day and divides by zero on the last day of every period.
+- **`AUTH_PASSWORD_HASH` is not just a verifier in this design** — it also signs sessions, so it
+  can mint one. See the security-debt note above.
 - **Cross-origin fetches need `credentials: "include"`.** The API is a different origin, so
   without it the session cookie is never sent and every request looks anonymous.
 - **Two savings figures, not one.** `savings_rate` is `(income − spending) / income`, the standard
