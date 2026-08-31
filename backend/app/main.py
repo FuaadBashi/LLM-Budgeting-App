@@ -13,6 +13,7 @@ from app.api.goal_routes import router as goal_router
 from app.api.obligation_routes import router as obligation_router
 from app.api.routes import router
 from app.api.import_routes import router as import_router
+from app.api.insight_routes import router as insight_router
 from app.api.scenario_routes import router as scenario_router
 from app.auth import require_session, session_secret_warning, startup_warning
 
@@ -52,6 +53,7 @@ app.include_router(export_router, prefix="/api", dependencies=[Depends(require_s
 app.include_router(goal_router, prefix="/api", dependencies=[Depends(require_session)])
 app.include_router(scenario_router, prefix="/api", dependencies=[Depends(require_session)])
 app.include_router(import_router, prefix="/api", dependencies=[Depends(require_session)])
+app.include_router(insight_router, prefix="/api", dependencies=[Depends(require_session)])
 
 
 

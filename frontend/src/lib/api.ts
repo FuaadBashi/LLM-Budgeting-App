@@ -440,6 +440,45 @@ export interface ImportBatch {
   duplicates: number;
 }
 
+export interface Term {
+  label: string;
+  /** Signed as it contributes, so the client adds rather than deciding. */
+  amount_minor: Minor;
+  detail: string;
+  parts: Term[];
+}
+
+export interface Derivation {
+  figure: string;
+  total_minor: Minor;
+  note: string;
+  terms: Term[];
+}
+
+export interface Evidence {
+  label: string;
+  amount_minor: Minor | null;
+  detail: string;
+}
+
+export type Severity = "good" | "warning" | "serious" | "critical";
+
+export interface Insight {
+  kind: string;
+  severity: Severity;
+  title: string;
+  detail: string;
+  action: string;
+  evidence: Evidence[];
+}
+
+export const getInsights = () => get<Insight[]>("/insights");
+export const explainSafeToSpend = () =>
+  get<Derivation>("/explain/safe-to-spend");
+export const explainTotalAccessible = () =>
+  get<Derivation>("/explain/total-accessible");
+export const explainNetWorth = () => get<Derivation>("/explain/net-worth");
+
 export const getImportBatches = () => get<ImportBatch[]>("/import/batches");
 export const getCandidates = (status?: CandidateStatus) =>
   get<ImportCandidate[]>(`/import/candidates${status ? `?status=${status}` : ""}`);

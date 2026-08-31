@@ -25,6 +25,7 @@ const NAV: Item[] = [
   { key: "dashboard", label: "Dashboard", icon: <IconHome />, href: "/" },
   { key: "transactions", label: "Transactions", icon: <IconList />, href: "/transactions" },
   { key: "analytics", label: "Analytics", icon: <IconChart />, href: "/analytics" },
+  { key: "insights", label: "Insights", icon: <IconBulb />, href: "/insights" },
   { key: "budgets", label: "Budgets", icon: <IconMeter />, href: "/budgets" },
   { key: "calendar", label: "Calendar", icon: <IconCalendar />, href: "/calendar" },
   { key: "goals", label: "Goals", icon: <IconTarget />, href: "/goals" },
@@ -285,6 +286,15 @@ function IconInbox() {
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
       <path d="M2.5 12.5h4l1.2 2h4.6l1.2-2h4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M4.3 4h11.4l1.8 8.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1v-3L4.3 4Z" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconBulb() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+      <path d="M10 2.5a5 5 0 0 0-3 9v2h6v-2a5 5 0 0 0-3-9Z" strokeLinejoin="round" />
+      <path d="M8 16.5h4M8.5 18h3" strokeLinecap="round" />
     </svg>
   );
 }

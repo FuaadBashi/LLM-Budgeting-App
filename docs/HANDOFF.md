@@ -18,13 +18,14 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 6 | Structured imports, candidate inbox, duplicate detection | ✅ |
 | 7 | OCR / vision ingestion | ✗ |
 | 8 | Simulation lab | ✅ |
-| 9 | Intelligence — explanations, recommendations | ✗ |
+| 9 | Intelligence — explanations, recommendations | ✅ |
 | 10 | Polish, backups, hosting | ✗ |
 
-**Phases 0–6 and 8 complete.** 401 tests.
+**Phases 0–6, 8 and 9 complete.** 426 tests. Only Phase 7 (OCR) and Phase 10 (polish, hosting)
+remain.
 
-Frontend has nine screens — dashboard, transactions, analytics, budgets, calendar, goals,
-simulator, import and data — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
+Frontend has ten screens — dashboard, transactions, analytics, insights, budgets, calendar,
+goals, simulator, import and data — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
 The Add button records expenses, income, transfers/debt payments and refunds as balanced two-leg
 transactions. The transactions screen
 lists history, shows each row's effect on liquid cash, and offers Void as the correction path;
@@ -60,6 +61,8 @@ live; routes only translate to and from integer minor units.
 | `domain/classification.py` | Derived transaction type |
 | `domain/simulation.py` | Scenario projection; reads the ledger, writes nothing (P1) |
 | `domain/importing.py` | Statement parsing, duplicate detection, acceptance (M1–M4) |
+| `domain/explain.py` | Derivation traces; terms sum to the figure (E1) |
+| `domain/insights.py` | Observations, each citing evidence (E2); read-only (E3) |
 
 **Enforced in the database, not application code** (so it holds for raw SQL too):
 
@@ -91,11 +94,14 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X11 | Expected income: all engines derive occurrences from the rule | ✅ `test_income_occurrences.py` |
 | X12 | Simulation reads the ledger and never writes to it (P1) | ✅ `test_simulation.py` asserts balances, net worth and transaction count are unchanged after run/fetch/compare |
 | X13 | Staging an import never moves a balance; only acceptance does | ✅ `test_importing.py::test_staging_never_touches_the_ledger` |
+| X14 | An explanation's terms sum to the figure it explains (E1) | ✅ `test_explain.py` — safe-to-spend, total-accessible and net worth, in Decimal and in minor units |
+| X15 | Insights read the engines rather than recomputing them | ✅ `test_explain.py::test_budget_insights_cite_the_budget_s_own_numbers` |
 
-**Recommended next task.** Phase 9 (intelligence — explanations and recommendations) or
-Phase 10 (polish, scheduled backups, hosting). Phase 7 (OCR) remains the expensive one and its
-candidate-inbox plumbing now exists, so it is unblocked whenever it is wanted. The correctness
-and security debt below are both empty.
+**Recommended next task.** Phase 10 (scheduled backups, then hosting) — the backup gap is the
+only thing left that could actually cost data. Phase 7 (OCR) is the expensive one; its
+candidate-inbox plumbing now exists, so it is unblocked whenever it is wanted, but it needs a
+dependency decision (local Tesseract vs a vision API) that is worth making deliberately. The
+correctness and security debt below are both empty.
 
 ---
 
@@ -174,6 +180,9 @@ reconciles these engines with the ledger, budget and calendar for one complete m
 
 These are bugs already found and fixed. They will come back if the reasoning is lost.
 
+- **`budget_warnings.evaluate()` is keyword-only, and `enrich` has already called it.** The
+  warnings are on `BudgetPeriodResult.warnings`. Calling it again is a second call site for the
+  same arithmetic, and it will not even bind positionally.
 - **A candidate fingerprint must not carry a date component.** Baking in the month looks
   harmless and fails silently across a boundary: a payment exported as 31 August and again as
   1 September is one day apart, inside the matching window, but lands under a different key.

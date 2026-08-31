@@ -108,6 +108,37 @@ def near_term_window_end(session: Session, today: date) -> date:
     return max(next_income, today + timedelta(days=floor_days))
 
 
+def near_term_committed_rows(session: Session, today: date, window_end: date):
+    """The individual obligations behind `near_term_committed`.
+
+    Split out so the explanation and the figure cannot drift: both read this one
+    predicate, the same way every ledger engine reads `posted_transaction_ids`.
+    A second query that merely *looks* equivalent is how an explanation starts
+    disagreeing with the number it explains.
+    """
+    return session.scalars(
+        select(ObligationInstance)
+        .join(
+            FutureObligation,
+            ObligationInstance.obligation_id == FutureObligation.id,
+        )
+        .outerjoin(
+            Transaction, ObligationInstance.fulfilled_by_transaction_id == Transaction.id
+        )
+        .where(ObligationInstance.due_date >= today)
+        .where(ObligationInstance.due_date <= window_end)
+        .where(FutureObligation.hard.is_(True))
+        .where(FutureObligation.active.is_(True))
+        .where(
+            or_(
+                ObligationInstance.fulfilled_by_transaction_id.is_(None),
+                Transaction.booking_date > today,
+            )
+        )
+        .order_by(ObligationInstance.due_date)
+    ).all()
+
+
 def near_term_committed(session: Session, today: date, window_end: date) -> Decimal:
     """Hard obligations due inside the window whose money has not yet left cash.
 
