@@ -203,6 +203,9 @@ export function ImportInbox({
                 name="file"
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
+                // Opens the camera directly on a phone. Desktop browsers ignore
+                // it and show the file picker, so there is no fallback to write.
+                capture="environment"
                 required
                 className="block w-full text-sm"
                 style={{ color: "var(--text-secondary)" }}
