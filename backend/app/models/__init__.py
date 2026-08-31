@@ -21,6 +21,7 @@ from app.models.planning import (
     GoalContribution,
     ObligationInstance,
     SavingsGoal,
+    Scenario,
     UserProfile,
 )
 
@@ -29,6 +30,6 @@ __all__ = [
     "Account", "AccountKind", "Base", "Budget", "BudgetPeriod", "BudgetRevision", "Category",
     "CategoryNature", "ExpectedIncome", "FutureObligation", "GoalContribution",
     "GoalPriority", "Money", "ObligationInstance", "Posting", "RolloverPolicy",
-    "SavingsGoal", "TimestampedUUID", "Transaction", "TransactionClass",
+    "SavingsGoal", "Scenario", "TimestampedUUID", "Transaction", "TransactionClass",
     "TransactionStatus", "UserProfile",
 ]

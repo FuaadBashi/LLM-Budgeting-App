@@ -11,6 +11,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     Enum,
@@ -272,3 +273,29 @@ class ExpectedIncome(TimestampedUUID, Base):
         ForeignKey("accounts.id"), nullable=True
     )
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class Scenario(TimestampedUUID, Base):
+    """A hypothetical, stored as assumptions rather than as fake transactions.
+
+    Rulebook section 11 and invariant P1: the simulated layer never writes to the
+    ledger. A scenario records what was assumed and the date it was anchored to;
+    its outputs are recomputed on read like every other derived figure, so a
+    scenario saved in March still answers "what did this imply?" rather than
+    freezing a number that has since stopped being true.
+
+    ``assumptions`` holds integer minor units, not decimal strings. Integers are
+    exact in JSON up to 2^53, which comfortably covers any personal balance --
+    the string rule exists for *decimal* amounts, which do round-trip through a
+    float.
+    """
+
+    __tablename__ = "scenarios"
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    #: The financial position this scenario diverges from.
+    baseline_date: Mapped[date] = mapped_column(Date, nullable=False)
+    #: How many months forward to project.
+    horizon_months: Mapped[int] = mapped_column(nullable=False, default=60)
+    assumptions: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
