@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.api.schemas import to_minor
 from app.db import get_session
 from app.domain import analytics
+from app.domain import backup as backup_module
 from app.domain import restore as restore_module
 from app.domain.clock import today as clock_today
 from app.domain.ledger_scope import posted_transaction_ids
@@ -235,69 +236,12 @@ def export_simple_csv(
 def export_json(session: Session = Depends(get_session)) -> StreamingResponse:
     """Full-fidelity machine-readable backup of the ledger.
 
-    Decimals are serialised as strings. JSON has no decimal type, so emitting
-    them as numbers would round-trip through a float and quietly change the
-    figures a backup exists to preserve.
+    The payload comes from `domain/backup.py`, which is also what a scheduled
+    backup writes (B-A). Two serialisations would mean restore had only ever
+    been tried against one of them.
     """
-    accounts = [
-        {
-            "id": str(a.id),
-            "name": a.name,
-            "kind": a.kind.value,
-            "currency": a.currency,
-            "opening_balance": str(a.opening_balance),
-            "active": a.active,
-        }
-        for a in session.scalars(select(Account).order_by(Account.name))
-    ]
-    categories = [
-        {
-            "id": str(c.id),
-            "name": c.name,
-            "parent_id": str(c.parent_id) if c.parent_id else None,
-            "nature": c.nature.value,
-        }
-        for c in session.scalars(select(Category).order_by(Category.name))
-    ]
-    transactions = []
-    for txn in session.scalars(select(Transaction).order_by(Transaction.booking_date)):
-        transactions.append(
-            {
-                "id": str(txn.id),
-                "booking_date": txn.booking_date.isoformat(),
-                "occurred_at": txn.occurred_at.isoformat(),
-                "description": txn.description,
-                "merchant": txn.merchant,
-                "status": txn.status.value,
-                "source": txn.source,
-                "reverses_id": str(txn.reverses_id) if txn.reverses_id else None,
-                "reimburses_id": str(txn.reimburses_id) if txn.reimburses_id else None,
-                "postings": [
-                    {
-                        "id": str(p.id),
-                        "account_id": str(p.account_id),
-                        "category_id": str(p.category_id) if p.category_id else None,
-                        "amount": str(p.amount),
-                        "currency": p.currency,
-                    }
-                    for p in txn.postings
-                ],
-            }
-        )
-
-    payload = json.dumps(
-        {
-            "format": "personal-finance-os/backup",
-            "version": 1,
-            "exported_for": clock_today(session).isoformat(),
-            "accounts": accounts,
-            "categories": categories,
-            "transactions": transactions,
-        },
-        indent=1,
-    )
     return StreamingResponse(
-        iter([payload]),
+        iter([backup_module.serialise(session)]),
         media_type="application/json",
         headers={"Content-Disposition": 'attachment; filename="backup.json"'},
     )

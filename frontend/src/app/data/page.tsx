@@ -1,7 +1,13 @@
 import { AppShell } from "@/components/AppShell";
+import { BackupPanel } from "@/components/BackupPanel";
 import { DataManager } from "@/components/DataManager";
 import { requireSession } from "@/lib/guard";
-import { getTransactions, type Transaction } from "@/lib/api";
+import {
+  getBackupStatus,
+  getTransactions,
+  type BackupStatus,
+  type Transaction,
+} from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
@@ -12,9 +18,13 @@ export default async function DataPage() {
   // Whether the ledger is empty decides how loud the restore warning is, so it
   // is worth one request rather than assuming the destructive case.
   let transactions: Transaction[] = [];
+  let backups: BackupStatus | null = null;
   let error: string | null = null;
   try {
-    transactions = await getTransactions();
+    [transactions, backups] = await Promise.all([
+      getTransactions(),
+      getBackupStatus(),
+    ]);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
   }
@@ -40,7 +50,10 @@ export default async function DataPage() {
             Could not reach the API ({error}).
           </div>
         ) : (
-          <DataManager empty={transactions.length === 0} />
+          <>
+            {backups && <BackupPanel status={backups} />}
+            <DataManager empty={transactions.length === 0} />
+          </>
         )}
       </main>
     </AppShell>

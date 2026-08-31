@@ -37,6 +37,11 @@ def _auth_disabled_by_default(monkeypatch):
     """
     monkeypatch.setattr(settings, "auth_password_hash", "")
     monkeypatch.setattr(settings, "session_secret", "")
+    # And with the backup timer off. Any test spinning up a TestClient runs the
+    # app lifespan, which started the scheduler -- against the real database,
+    # writing real backups into backend/backups/. Tests that care about backups
+    # point BACKUP_DIR at tmp_path and call the code directly.
+    monkeypatch.setattr(settings, "backup_enabled", False)
 
 
 @pytest.fixture(scope="session")

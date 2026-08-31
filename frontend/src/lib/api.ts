@@ -472,6 +472,28 @@ export interface Insight {
   evidence: Evidence[];
 }
 
+export interface BackupFile {
+  name: string;
+  written_at: string;
+  size_bytes: number;
+}
+
+export interface BackupStatus {
+  directory: string;
+  enabled: boolean;
+  interval_hours: number;
+  keep: number;
+  /** Null means none has ever been written — a different problem from an old one. */
+  latest: BackupFile | null;
+  age_hours: number | null;
+  stale: boolean;
+  last_error: string;
+  files: BackupFile[];
+}
+
+export const getBackupStatus = () => get<BackupStatus>("/backups");
+export const runBackup = () => post<BackupStatus>("/backups", {});
+
 export const getInsights = () => get<Insight[]>("/insights");
 export const explainSafeToSpend = () =>
   get<Derivation>("/explain/safe-to-spend");

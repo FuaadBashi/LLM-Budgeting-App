@@ -19,10 +19,10 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 7 | OCR / vision ingestion | ✗ |
 | 8 | Simulation lab | ✅ |
 | 9 | Intelligence — explanations, recommendations | ✅ |
-| 10 | Polish, backups, hosting | ✗ |
+| 10 | Polish, backups, hosting | ◐ scheduled backups done; hosting outstanding |
 
-**Phases 0–6, 8 and 9 complete.** 426 tests. Only Phase 7 (OCR) and Phase 10 (polish, hosting)
-remain.
+**Phases 0–6, 8 and 9 complete; Phase 10's backup half is done.** 448 tests. Phase 7 (OCR) and
+hosting are what is left.
 
 Frontend has ten screens — dashboard, transactions, analytics, insights, budgets, calendar,
 goals, simulator, import and data — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
@@ -63,6 +63,8 @@ live; routes only translate to and from integer minor units.
 | `domain/importing.py` | Statement parsing, duplicate detection, acceptance (M1–M4) |
 | `domain/explain.py` | Derivation traces; terms sum to the figure (E1) |
 | `domain/insights.py` | Observations, each citing evidence (E2); read-only (E3) |
+| `domain/backup.py` | Atomic backup writes, retention, staleness (B-A/B-B/B-C) |
+| `scheduler.py` | The lifespan timer that calls it |
 
 **Enforced in the database, not application code** (so it holds for raw SQL too):
 
@@ -96,12 +98,14 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X13 | Staging an import never moves a balance; only acceptance does | ✅ `test_importing.py::test_staging_never_touches_the_ledger` |
 | X14 | An explanation's terms sum to the figure it explains (E1) | ✅ `test_explain.py` — safe-to-spend, total-accessible and net worth, in Decimal and in minor units |
 | X15 | Insights read the engines rather than recomputing them | ✅ `test_explain.py::test_budget_insights_cite_the_budget_s_own_numbers` |
+| X16 | A scheduled backup and `/export/backup.json` are the same bytes (B-A) | ✅ `test_backup.py::test_the_written_file_matches_the_export_endpoint_byte_for_byte` |
+| X17 | A backup file restores to identical balances and net worth (B-B) | ✅ `test_backup.py::test_a_backup_file_restores` |
 
-**Recommended next task.** Phase 10 (scheduled backups, then hosting) — the backup gap is the
-only thing left that could actually cost data. Phase 7 (OCR) is the expensive one; its
-candidate-inbox plumbing now exists, so it is unblocked whenever it is wanted, but it needs a
-dependency decision (local Tesseract vs a vision API) that is worth making deliberately. The
-correctness and security debt below are both empty.
+**Recommended next task.** Phase 7 (OCR) or hosting. OCR is the expensive one — its
+candidate-inbox plumbing now exists so it is unblocked, but it needs a dependency decision
+(local Tesseract vs a vision API) worth making deliberately rather than by default. Hosting is
+mostly the HTTPS/`COOKIE_SECURE` work already described above. The correctness and security debt
+below are both empty.
 
 ---
 
@@ -116,8 +120,17 @@ set a password (`scripts/set_password.py` writes the hash to `.env`) and termina
 of it, then set `COOKIE_SECURE=true`. The app logs a loud warning at startup while unprotected.
 
 Backup and restore are done, with a round-trip test asserting balances and net worth survive a
-wipe, and reachable from `/data` rather than only by hand. There is no *scheduled* backup —
-running the export is still a manual act.
+wipe, and reachable from `/data` rather than only by hand.
+
+**Scheduled backups now run.** A lifespan timer writes one every `BACKUP_INTERVAL_HOURS` (24 by
+default) into `BACKUP_DIR` (`backend/backups/`, gitignored), keeping the newest `BACKUP_KEEP`.
+Writes are atomic and land at 0600. The timer only runs while the API does — which is why the
+age of the newest file is reported at `/backups`, shown on `/data`, and raised as an insight when
+it goes stale. For a backup that does not depend on the app being open:
+
+```
+0 3 * * *  cd /path/to/backend && .venv/bin/python scripts/backup.py
+```
 
 ### Security debt
 
@@ -180,6 +193,14 @@ reconciles these engines with the ledger, budget and calendar for one complete m
 
 These are bugs already found and fixed. They will come back if the reasoning is lost.
 
+- **Anything that writes files must be off in tests.** The backup timer starts in the FastAPI
+  lifespan, so every `TestClient` fixture started it — against the *real* database, writing real
+  ledger backups into `backend/backups/`. `conftest` now disables it the same way it disables
+  auth. Check this for any future background task.
+- **Wall-clock time goes through `clock.now()`, never `datetime.now()`.** The X9 guard permits
+  `datetime.now` in `domain/clock.py` only. Reporting questions use `clock.today(session)`;
+  genuinely wall-clock ones (when a file was written) use `clock.now()`. Do not add a per-file
+  exemption to the guard.
 - **`budget_warnings.evaluate()` is keyword-only, and `enrich` has already called it.** The
   warnings are on `BudgetPeriodResult.warnings`. Calling it again is a second call site for the
   same arithmetic, and it will not even bind positionally.

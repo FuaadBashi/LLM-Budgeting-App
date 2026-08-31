@@ -18,3 +18,9 @@ npm-debug.log*
 
 # macOS
 .DS_Store
+
+# Scheduled backups. Full copies of the ledger -- they must never be committed,
+# and they land here by default (BACKUP_DIR).
+backups/
+backend/backups/
+*.json.tmp

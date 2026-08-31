@@ -385,6 +385,86 @@ def cash_position(session: Session, today: date) -> list[Insight]:
     ]
 
 
+def backup_health(session: Session, today: date) -> list[Insight]:
+    """Whether the backups are actually happening.
+
+    The one insight not about money. A scheduler that stopped a month ago looks
+    identical to one that is working unless something reports the age of the
+    newest file -- and a backup nobody checked is trusted right up until it is
+    needed.
+    """
+    from pathlib import Path
+
+    from app.config import settings
+    from app.domain import backup as backup_module
+
+    state = backup_module.status(
+        Path(settings.backup_dir),
+        enabled=settings.backup_enabled,
+        interval_hours=settings.backup_interval_hours,
+        keep=settings.backup_keep,
+    )
+    if not state.enabled:
+        return [
+            Insight(
+                kind="backups_off",
+                severity=WARNING,
+                title="Scheduled backups are switched off",
+                detail=(
+                    "Exports still work, but nothing is written automatically. "
+                    "Everything in this ledger was typed or imported by hand."
+                ),
+                evidence=(
+                    Evidence("Backup directory", None, detail=state.directory),
+                    Evidence("Files on disk", None, detail=str(len(state.files))),
+                ),
+                action="Set BACKUP_ENABLED=true, or run scripts/backup.py from cron.",
+            )
+        ]
+    if not state.stale:
+        return []
+
+    return [
+        Insight(
+            kind="backups_stale",
+            severity=SERIOUS,
+            title=(
+                "No backup has ever been written"
+                if state.latest is None
+                else "The newest backup is out of date"
+            ),
+            detail=(
+                "Backups are switched on but nothing has been written yet."
+                if state.latest is None
+                else f"The last one was {state.age_hours:.0f} hours ago, and they "
+                f"are meant to run every {state.interval_hours}."
+            ),
+            evidence=(
+                Evidence("Backup directory", None, detail=state.directory),
+                Evidence("Files on disk", None, detail=str(len(state.files))),
+                Evidence(
+                    "Newest",
+                    None,
+                    detail=(
+                        f"{state.latest.written_at:%-d %B %Y %H:%M} UTC"
+                        if state.latest
+                        else "none"
+                    ),
+                ),
+                *(
+                    (Evidence("Last error", None, detail=state.last_error),)
+                    if state.last_error
+                    else ()
+                ),
+            ),
+            action=(
+                "Run one from the Data screen, or wire scripts/backup.py into "
+                "cron so it does not depend on the app being open."
+            ),
+        )
+    ]
+
+
 #: Worst first. The dashboard shows the top few, and "top" has to mean something.
 _ORDER = {CRITICAL: 0, SERIOUS: 1, WARNING: 2, GOOD: 3}
 
@@ -395,6 +475,7 @@ def collect(session: Session, today: date | None = None) -> list[Insight]:
     found: list[Insight] = []
     for producer in (
         cash_position,
+        backup_health,
         budget_pace,
         goals_at_risk,
         untracked_recurring,

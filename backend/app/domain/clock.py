@@ -12,7 +12,7 @@ early, and spending bucketed into tomorrow.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -40,3 +40,16 @@ def reporting_timezone(session: Session) -> ZoneInfo:
 def today(session: Session) -> date:
     """Today's date in the reporting timezone. Use this, never ``date.today()``."""
     return datetime.now(reporting_timezone(session)).date()
+
+
+def now() -> datetime:
+    """The current UTC instant, for things that are genuinely wall-clock.
+
+    Reporting questions -- "what day is it for budget purposes?" -- must use
+    `today(session)`, which respects the reporting timezone. This is for the
+    other kind: when a file was written, how long ago something ran. The X9
+    guard permits `datetime.now` in this module only, so routing those callers
+    through here keeps the guard as strict as it was rather than carving out an
+    exemption per file.
+    """
+    return datetime.now(timezone.utc)
