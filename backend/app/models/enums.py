@@ -44,6 +44,20 @@ class TransactionStatus(enum.StrEnum):
     VOIDED = "voided"
 
 
+class CandidateStatus(enum.StrEnum):
+    """Where an imported row is in its review.
+
+    REJECTED rows are kept, not deleted: "I already looked at this and said no"
+    is information, and without it the same row comes back on the next import.
+    """
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    #: Judged to already exist. Distinct from REJECTED, which is a human saying no.
+    DUPLICATE = "duplicate"
+
+
 class TransactionClass(enum.StrEnum):
     """Derived reporting classification (rulebook section 2). Computed, not stored."""
 
