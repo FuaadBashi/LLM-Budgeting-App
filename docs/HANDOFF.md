@@ -123,9 +123,11 @@ each with named tests.
 
 ### Product gaps
 
-3. Editing. Everything can be created from the UI; changing a budget amount, a goal target or a
-   commitment still needs the API, even though PATCH exists for budgets and goals.
-4. `rollover_reset` works but no UI reaches it. `Budget.end_date` is now settable at creation.
+3. Deleting. Budgets, goals and commitments can be created and edited, and archived via an
+   active flag, but there is no delete — which is probably correct for a ledger-adjacent app,
+   though nothing says so explicitly yet.
+4. `rollover_reset` works but no UI reaches it, and a budget's period/anchor cannot be changed
+   after creation (deliberately — that reshapes every historical boundary).
 5. XLSX and PDF export (plan §10 lists four formats; CSV — both posting-level and summary — and
    JSON are built).
 6. No restore *UI* — restoring means POSTing a file to the API by hand.
@@ -174,6 +176,9 @@ These are bugs already found and fixed. They will come back if the reasoning is 
 - **Tests must never read the developer's `.env`.** `conftest.py` forces auth off for every
   test; without it, setting a real password turned auth on for the whole suite and 53 tests
   failed with 401. A suite whose result depends on local configuration tests the environment.
+- **Obligation instances carry a copy of the amount.** Editing an obligation must rewrite the
+  unfulfilled ones or the projection keeps the old figure while the obligation shows the new —
+  two numbers for one bill. Fulfilled instances keep theirs; they record what was committed.
 - **Server components have no cookie jar.** `credentials: "include"` does nothing in Node, so a
   server-side fetch is anonymous unless the incoming request's cookies are forwarded by hand
   (`lib/api.ts::forwardedCookies`). Without it, login *succeeds*, sets a cookie, and then the very

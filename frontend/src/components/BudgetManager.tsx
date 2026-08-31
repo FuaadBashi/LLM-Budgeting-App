@@ -2,8 +2,10 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { InlineEditor } from "@/components/InlineEditor";
 import {
   createBudget,
+  updateBudget,
   type BudgetPeriod as BudgetPeriodResult,
   type BudgetSummary,
   type Category,
@@ -214,6 +216,38 @@ export function BudgetManager({
                     </span>
                   </>
                 )}
+                <InlineEditor
+                  title={b.name}
+                  note="Applies from the current period onward. Closed periods keep the amount
+                        that was in force when they ran, so history does not move."
+                  fields={[
+                    {
+                      name: "amount",
+                      label: "Amount per period",
+                      kind: "money",
+                      value: (b.current_amount_minor / 100).toFixed(2),
+                    },
+                    ...(b.period === "daily"
+                      ? []
+                      : [
+                          {
+                            name: "rollover_policy",
+                            label: "Rollover",
+                            kind: "select" as const,
+                            value: b.rollover_policy,
+                            options: ROLLOVER,
+                          },
+                        ]),
+                  ]}
+                  onSave={(v) =>
+                    updateBudget(b.id, {
+                      amount_minor: parseMajorToMinor(v.amount),
+                      ...(v.rollover_policy
+                        ? { rollover_policy: v.rollover_policy }
+                        : {}),
+                    })
+                  }
+                />
               </li>
             );
           })}

@@ -298,9 +298,17 @@ export async function logout(): Promise<void> {
   await fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" });
 }
 
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  return send<T>(path, body, "PATCH");
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
+  return send<T>(path, body, "POST");
+}
+
+async function send<T>(path: string, body: unknown, method: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json", ...(await forwardedCookies()) },
     credentials: "include",
     body: JSON.stringify(body),
@@ -338,6 +346,12 @@ export const getObligations = () => get<Obligation[]>("/obligations");
 export const createGoal = (body: unknown) => post<Goal>("/goals", body);
 export const createBudget = (body: unknown) => post<BudgetSummary>("/budgets", body);
 export const createObligation = (body: unknown) => post<Obligation>("/obligations", body);
+
+export const updateGoal = (id: string, body: unknown) => patch<Goal>(`/goals/${id}`, body);
+export const updateBudget = (id: string, body: unknown) =>
+  patch<BudgetSummary>(`/budgets/${id}`, body);
+export const updateObligation = (id: string, body: unknown) =>
+  patch<Obligation>(`/obligations/${id}`, body);
 export const getPeriodSummary = (start?: string, end?: string) =>
   get<PeriodSummary>(
     start && end ? `/analytics/period?start=${start}&end=${end}` : "/analytics/period",

@@ -2,7 +2,8 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { createGoal, type Account, type Goal } from "@/lib/api";
+import { createGoal, updateGoal, type Account, type Goal } from "@/lib/api";
+import { InlineEditor } from "@/components/InlineEditor";
 import { formatMinor, parseMajorToMinor } from "@/lib/money";
 
 const PRIORITIES = [
@@ -197,6 +198,54 @@ function GoalCard({ goal }: { goal: Goal }) {
         <div
           className="h-full rounded-full"
           style={{ width: `${pct * 100}%`, background: "var(--accent)" }}
+        />
+      </div>
+
+      <div className="mt-3 flex justify-end">
+        <InlineEditor
+          title={goal.name}
+          note="Changing the monthly contribution changes what safe to spend reserves."
+          fields={[
+            { name: "name", label: "Name", kind: "text", value: goal.name },
+            {
+              name: "target",
+              label: "Target",
+              kind: "money",
+              value: (goal.target_amount_minor / 100).toFixed(2),
+            },
+            {
+              name: "contribution",
+              label: "Monthly",
+              kind: "money",
+              value: (goal.planned_contribution_minor / 100).toFixed(2),
+            },
+            {
+              name: "priority",
+              label: "Priority",
+              kind: "select",
+              value: goal.priority,
+              options: PRIORITIES.map((p) => ({ value: p.value, label: `${p.label} — ${p.note}` })),
+            },
+            {
+              name: "active",
+              label: "Status",
+              kind: "select",
+              value: goal.active ? "true" : "false",
+              options: [
+                { value: "true", label: "Active" },
+                { value: "false", label: "Archived — excluded from every figure" },
+              ],
+            },
+          ]}
+          onSave={(v) =>
+            updateGoal(goal.id, {
+              name: v.name,
+              target_amount_minor: parseMajorToMinor(v.target),
+              planned_contribution_minor: parseMajorToMinor(v.contribution),
+              priority: v.priority,
+              active: v.active === "true",
+            })
+          }
         />
       </div>
 

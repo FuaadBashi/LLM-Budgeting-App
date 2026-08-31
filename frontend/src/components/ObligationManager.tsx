@@ -4,9 +4,11 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   createObligation,
+  updateObligation,
   type Category,
   type Obligation,
 } from "@/lib/api";
+import { InlineEditor } from "@/components/InlineEditor";
 import { formatMinor, parseMajorToMinor } from "@/lib/money";
 
 const FREQUENCIES = [
@@ -167,6 +169,48 @@ export function ObligationManager({
               <span className="tnum text-sm" style={{ color: "var(--text-primary)" }}>
                 {formatMinor(o.amount_minor)}
               </span>
+              <InlineEditor
+                title={o.name}
+                note="Changing the amount also updates every unpaid instance. Ones already
+                      matched to a payment keep what they actually cost."
+                fields={[
+                  { name: "name", label: "Name", kind: "text", value: o.name },
+                  {
+                    name: "amount",
+                    label: "Amount",
+                    kind: "money",
+                    value: (o.amount_minor / 100).toFixed(2),
+                  },
+                  {
+                    name: "hard",
+                    label: "Treatment",
+                    kind: "select",
+                    value: o.hard ? "true" : "false",
+                    options: [
+                      { value: "true", label: "Committed — reduces safe to spend" },
+                      { value: "false", label: "Planned — shown, but not reserved" },
+                    ],
+                  },
+                  {
+                    name: "active",
+                    label: "Status",
+                    kind: "select",
+                    value: o.active ? "true" : "false",
+                    options: [
+                      { value: "true", label: "Active" },
+                      { value: "false", label: "Archived — removed from the forecast" },
+                    ],
+                  },
+                ]}
+                onSave={(v) =>
+                  updateObligation(o.id, {
+                    name: v.name,
+                    amount_minor: parseMajorToMinor(v.amount),
+                    hard: v.hard === "true",
+                    active: v.active === "true",
+                  })
+                }
+              />
             </li>
           ))}
         </ul>

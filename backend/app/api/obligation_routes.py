@@ -42,6 +42,22 @@ class ObligationIn(BaseModel):
     hard: bool = True
 
 
+class ObligationUpdate(BaseModel):
+    """Fields that can change without re-shaping the schedule.
+
+    The recurrence rule and first due date are deliberately absent: changing
+    either moves every generated instance, including ones already matched to
+    real payments. That is a new obligation, not an edit.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    amount_minor: int | None = Field(default=None, gt=0)
+    end_date: date | None = None
+    category_id: uuid.UUID | None = None
+    hard: bool | None = None
+    active: bool | None = None
+
+
 class ObligationOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -121,6 +137,55 @@ def create_obligation(
     session.refresh(ob)
 
     generate_instances(session, clock_today(session) + timedelta(days=DEFAULT_HORIZON_DAYS), ob)
+    return _obligation_out(ob)
+
+
+@router.patch("/obligations/{obligation_id}", response_model=ObligationOut)
+def update_obligation(
+    obligation_id: uuid.UUID,
+    payload: ObligationUpdate,
+    session: Session = Depends(get_session),
+) -> ObligationOut:
+    """Amend a commitment.
+
+    Changing the amount rewrites **unfulfilled** instances too. They carry a copy
+    of the amount rather than reading through, so without this a rent rise would
+    leave every projected instance at the old figure while the obligation itself
+    showed the new one -- two numbers for the same bill.
+
+    Fulfilled instances keep their original amount. They record what was actually
+    committed at the time, and a later rent rise does not change what last month
+    cost.
+    """
+    ob = session.get(FutureObligation, obligation_id)
+    if ob is None:
+        raise HTTPException(status_code=404, detail="obligation not found")
+    if payload.end_date and payload.end_date < ob.first_due_date:
+        raise HTTPException(422, "end_date must not precede first_due_date")
+
+    if payload.name is not None:
+        ob.name = payload.name
+    if payload.end_date is not None:
+        ob.end_date = payload.end_date
+    if payload.hard is not None:
+        ob.hard = payload.hard
+    if payload.active is not None:
+        ob.active = payload.active
+    if "category_id" in payload.model_fields_set:
+        ob.category_id = payload.category_id
+
+    if payload.amount_minor is not None:
+        new_amount = from_minor(payload.amount_minor)
+        ob.amount = new_amount
+        for instance in session.scalars(
+            select(ObligationInstance)
+            .where(ObligationInstance.obligation_id == ob.id)
+            .where(ObligationInstance.fulfilled_by_transaction_id.is_(None))
+        ):
+            instance.amount = new_amount
+
+    session.commit()
+    session.refresh(ob)
     return _obligation_out(ob)
 
 
