@@ -176,8 +176,25 @@ step, never appearing in both states or neither.
 Matching is by amount, date proximity and account. A match is a *suggestion* until confirmed;
 auto-matching requires exact amount and a date within ±3 days.
 
-Recurrence follows RFC 5545 (iCalendar RRULE) semantics. Month-end rules clamp: "the 31st" in
-February resolves to the 28th/29th.
+Recurrence follows RFC 5545 (iCalendar RRULE) semantics. Month-end rules **clamp**: "the 31st"
+in February resolves to the 28th/29th.
+
+Clamping is not the standard's default — RFC 5545 *skips* a month that lacks the requested day,
+so `FREQ=MONTHLY;BYMONTHDAY=31` drops rent in February, April, June, September and November.
+Clamping is expressed as the last available day of a candidate set, which is still pure RFC 5545:
+
+```
+FREQ=MONTHLY;BYMONTHDAY=28,29,30,31;BYSETPOS=-1
+```
+
+Rules are built from a frequency and an anchor by the server, never supplied raw by a client, so
+this is applied consistently. Leap years follow from it with no calendar arithmetic.
+
+**Matching.** An obligation instance is matched to a posted transaction by exact amount, a
+booking date within ±3 days, and the **expense leg** (so a card-funded bill still matches). A
+match is a suggestion until confirmed; one transaction satisfies at most one instance. The rule
+leans strict because the failure is asymmetric: a wrong link removes a real commitment from the
+forecast and overstates what is safe to spend.
 
 ---
 
@@ -287,11 +304,17 @@ rebuildable from canonical records and must never be independently editable.
 
 Every invariant above is a named test. The complete set:
 
-`L1` postings sum to zero · `L2` posting has one account · `L3` no destructive delete ·
+`L1` postings sum to zero · `L2` posting has one account · `L3` one correction mechanism ·
 `N1` transfer preserves net worth · `S1` no double-count of fulfilled contributions ·
 `S2` negative safe-to-spend is representable · `O1` fulfilled obligation leaves forecast ·
-`G1` attribution ≤ balance · `G2` goal conflict surfaced · `D1` bucketing uses booking_date ·
-`R1` cache rebuild is a no-op · `P1` simulation never mutates actuals
+`D1` bucketing uses booking_date · `B1` Spent is an expense-leg sum · `B2` no allowance the cash
+position denies
+
+**Not yet covered.** `G1` (attribution ≤ account balance) and `G2` (goal conflict surfaced) are
+defined in §7 but have no enforcement and no test. `R1` (cache rebuild is a no-op) holds
+trivially — nothing is cached — and will need a real test when caching arrives. `P1` (simulation
+never mutates actuals) awaits Phase 8. Listed here rather than silently omitted: a rulebook that
+implies coverage it does not have is worse than one that names the gap.
 
 Golden fixtures (§15.5 of the plan) live in `backend/tests/fixtures/golden/` as version-controlled
 YAML — hand-calculated months where every balance, budget, goal and projection is known. They are

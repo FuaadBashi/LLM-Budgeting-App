@@ -125,6 +125,29 @@ gains none — the overspent cash already left `Cash`, so subtracting it again d
 S1-shaped defect). The two figures are reconciled by capping the *presented* allowance at what cash
 supports, never by adding a term to §4.
 
+## Recurrence and calendar (Phase 4). Decided 31 August 2026
+
+**Recurrence rules are stored as RFC 5545 and expanded with `dateutil`.** The stored value means
+what the standard says rather than what one function does with it.
+
+**Month-end clamps rather than skips**, via `BYMONTHDAY=28,29,30,31;BYSETPOS=-1`. The naive rule
+drops a "31st" bill in five months of the year, silently. The server builds rules from a
+frequency so this is never left to a caller.
+
+**Generation and matching are separate, explicit operations.** A GET that silently writes
+fulfilment links would return different answers depending on whether anything had called it
+before. Generation is idempotent and never clears an existing link.
+
+**An auto-match is a suggestion.** Exact amount, ±3 days, measured on the expense leg;
+`match_confirmed` stays false until accepted.
+
+**The projected balance curve is committed flows only.** It assumes zero discretionary spending,
+which makes it the optimistic bound, and the UI says so. Presenting it as a forecast of what will
+happen would overstate what the data supports.
+
+**Future-dated posted transactions appear on the curve** but not in `account_balances(as_of=today)`.
+They are real ledger entries; excluding them would make the curve contradict its own opening balance.
+
 ## Open, and worth deciding before Phase 5
 
 - **Hosting and auth (Q23).** Local-only is fine now, but §14 of the plan lists HTTPS and
