@@ -25,8 +25,8 @@ const NAV: Item[] = [
   { key: "dashboard", label: "Dashboard", icon: <IconHome />, href: "/" },
   { key: "transactions", label: "Transactions", icon: <IconList />, href: "/transactions" },
   { key: "analytics", label: "Analytics", icon: <IconChart />, href: "/analytics" },
-  { key: "budgets", label: "Budgets", icon: <IconMeter /> },
-  { key: "calendar", label: "Calendar", icon: <IconCalendar /> },
+  { key: "budgets", label: "Budgets", icon: <IconMeter />, href: "/budgets" },
+  { key: "calendar", label: "Calendar", icon: <IconCalendar />, href: "/calendar" },
   { key: "goals", label: "Goals", icon: <IconTarget />, href: "/goals" },
 ];
 
