@@ -24,6 +24,20 @@ from app.models import (
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _auth_disabled_by_default(monkeypatch):
+    """Every test starts with authentication off.
+
+    Without this the suite reads whatever is in the developer's .env: setting a
+    real password turned auth on for all 313 tests and 53 of them started
+    failing with 401. A suite whose result depends on local configuration is
+    testing the environment, not the code.
+
+    Tests that care about auth switch it on themselves.
+    """
+    monkeypatch.setattr(settings, "auth_password_hash", "")
+
+
 @pytest.fixture(scope="session")
 def engine():
     """Test database, built by running the real migrations.

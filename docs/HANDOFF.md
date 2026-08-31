@@ -173,6 +173,9 @@ These are bugs already found and fixed. They will come back if the reasoning is 
   value and the two states must stay distinguishable.
 - **Elapsed + remaining = total + 1.** Today counts in both. Deriving one from the other is off
   by one every day and divides by zero on the last day of every period.
+- **Tests must never read the developer's `.env`.** `conftest.py` forces auth off for every
+  test; without it, setting a real password turned auth on for the whole suite and 53 tests
+  failed with 401. A suite whose result depends on local configuration tests the environment.
 - **`AUTH_PASSWORD_HASH` is not just a verifier in this design** — it also signs sessions, so it
   can mint one. See the security-debt note above.
 - **Cross-origin fetches need `credentials: "include"`.** The API is a different origin, so
