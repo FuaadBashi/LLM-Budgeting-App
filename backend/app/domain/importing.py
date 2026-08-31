@@ -426,6 +426,28 @@ def stage(
         by_row[row.row_number] = candidate
 
     session.flush()
+
+    # Category suggestions, cache first. Imported lazily because `enrichment`
+    # depends on this module's `normalise_description`. A failure here must not
+    # fail an import -- a staged row with no suggestion is the normal case, and
+    # with no API key it is the only case (A3).
+    try:
+        from app.domain import enrichment
+
+        suggestions = enrichment.resolve(
+            session, [row.description for row in rows]
+        )
+        for row in rows:
+            category_id = suggestions.get(normalise_description(row.description))
+            if category_id is not None:
+                by_row[row.row_number].suggested_category_id = category_id
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("uvicorn.error").warning(
+            "category suggestion skipped: %s", exc
+        )
+
     # Intra-file duplicates are resolved after the flush, when the earlier row
     # has an id to point at.
     for row_number, (kind, target) in verdicts.items():
@@ -505,6 +527,21 @@ def accept(
 
     candidate.status = CandidateStatus.ACCEPTED
     candidate.transaction_id = transaction.id
+
+    # A2: what the user actually chose outranks any guess, and is remembered so
+    # the next statement gets it right for free.
+    chosen = category_id or candidate.suggested_category_id
+    if candidate.description:
+        from app.domain import enrichment
+        from app.models.enums import SuggestionSource
+
+        enrichment.remember(
+            session,
+            candidate.description,
+            chosen,
+            source=SuggestionSource.USER,
+        )
+
     session.commit()
     session.refresh(transaction)
     return transaction

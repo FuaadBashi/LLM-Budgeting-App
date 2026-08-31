@@ -305,7 +305,17 @@ function CandidateRow({
               </select>
             </label>
             <label className="text-xs" style={{ color: "var(--text-muted)" }}>
-              <span className="mb-1 block">Category</span>
+              <span className="mb-1 block">
+                Category
+                {/* Say that it was guessed. A pre-filled field that looks like
+                    the user's own choice is the field they stop checking. */}
+                {row.suggested_category_id &&
+                  category === row.suggested_category_id && (
+                    <span className="ml-1.5" style={{ color: "var(--series-1)" }}>
+                      suggested
+                    </span>
+                  )}
+              </span>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}

@@ -44,6 +44,17 @@ class TransactionStatus(enum.StrEnum):
     VOIDED = "voided"
 
 
+class SuggestionSource(enum.StrEnum):
+    """Who decided a merchant's category.
+
+    USER always wins. A correction is worth more than a guess, and recording
+    which is which is what lets the cache improve instead of drifting.
+    """
+
+    MODEL = "model"
+    USER = "user"
+
+
 class CandidateStatus(enum.StrEnum):
     """Where an imported row is in its review.
 

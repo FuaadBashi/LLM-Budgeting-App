@@ -20,6 +20,7 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 8 | Simulation lab | ✅ |
 | 9 | Intelligence — explanations, recommendations | ✅ |
 | 10 | Polish, backups, hosting | ◐ scheduled backups done; hosting outstanding |
+| 11 | Assisted categorisation (LLM) | ◐ foundation done; receipt vision outstanding |
 
 **Phases 0–6, 8 and 9 complete; Phase 10's backup half is done.** 448 tests. Phase 7 (OCR) and
 hosting are what is left.
@@ -65,6 +66,7 @@ live; routes only translate to and from integer minor units.
 | `domain/insights.py` | Observations, each citing evidence (E2); read-only (E3) |
 | `domain/backup.py` | Atomic backup writes, retention, staleness (B-A/B-B/B-C) |
 | `scheduler.py` | The lifespan timer that calls it |
+| `domain/enrichment.py` | Merchant → category, cache-first (A1/A2/A3) |
 
 **Enforced in the database, not application code** (so it holds for raw SQL too):
 
@@ -100,10 +102,28 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X15 | Insights read the engines rather than recomputing them | ✅ `test_explain.py::test_budget_insights_cite_the_budget_s_own_numbers` |
 | X16 | A scheduled backup and `/export/backup.json` are the same bytes (B-A) | ✅ `test_backup.py::test_the_written_file_matches_the_export_endpoint_byte_for_byte` |
 | X17 | A backup file restores to identical balances and net worth (B-B) | ✅ `test_backup.py::test_a_backup_file_restores` |
+| X18 | No model output can become a figure — only an existing category (A1) | ✅ `test_enrichment.py` — invented categories and numeric answers both resolve to none |
+| X19 | The app is unchanged with no API key (A3) | ✅ `test_enrichment.py` — import works, no network, no error |
+
+### Assisted categorisation (Phase 11)
+
+`ANTHROPIC_API_KEY` is **optional and empty by default** — without it every suggestion path is a
+no-op and the app behaves exactly as before (A3). An Anthropic Console key is a separate product
+from a Claude.ai subscription. Install the client with `pip install -e '.[llm]'`.
+
+The cost design is the cache, not the prompt. `merchant_suggestions` is keyed on
+`normalise_description` — the same function duplicate detection uses — so every variant of
+`TESCO STORES 3421` collapses to one row and one question. A merchant is asked about once, ever;
+a user correction is stored as theirs and outranks the model permanently (A2). Running cost
+converges on zero rather than scaling with transaction count.
+
+The model may only pick a name from the category list supplied to it; anything else becomes no
+category (A1). There is no path by which model output becomes an amount, date or balance.
 
 **Recommended next task.** Phase 7 (OCR) or hosting. OCR is the expensive one — its
-candidate-inbox plumbing now exists so it is unblocked, but it needs a dependency decision
-(local Tesseract vs a vision API) worth making deliberately rather than by default. Hosting is
+candidate-inbox plumbing now exists so it is unblocked, but it needs a dependency decision that Phase 11 has now effectively made: with a client already
+wired, receipt reading is a vision call returning structured JSON, staged through the existing
+candidate inbox — not a Tesseract pipeline whose noisy text needs heuristic parsing. Hosting is
 mostly the HTTPS/`COOKIE_SECURE` work already described above. The correctness and security debt
 below are both empty.
 

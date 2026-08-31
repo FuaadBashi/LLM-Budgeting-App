@@ -31,5 +31,15 @@ class Settings(BaseSettings):
     #: must not be a data-loss event.
     backup_keep: int = 14
 
+    #: Anthropic API key. Empty means every LLM feature is simply off -- the app
+    #: works exactly as it does without one, with no suggestions. A separate
+    #: product from a Claude.ai subscription; get one at console.anthropic.com.
+    anthropic_api_key: str = ""
+    #: Classification is a small-model job. Reserve larger models for prose.
+    llm_model: str = "claude-haiku-4-5-20251001"
+    #: Hard ceiling on a single reply. Categorisation answers are a few tokens;
+    #: this is a runaway guard, not a target.
+    llm_max_tokens: int = 256
+
 
 settings = Settings()
