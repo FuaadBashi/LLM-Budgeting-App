@@ -16,14 +16,14 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 4 | Goals, obligations, recurrence, financial calendar | ✅ |
 | 5 | Analytics and export (CSV + JSON; XLSX/PDF deferred) | ✅ |
 | 6 | Structured imports, candidate inbox, duplicate detection | ✅ |
-| 7 | OCR / vision ingestion | ✗ |
+| 7 | OCR / vision ingestion | ✅ |
 | 8 | Simulation lab | ✅ |
 | 9 | Intelligence — explanations, recommendations | ✅ |
 | 10 | Polish, backups, hosting | ◐ scheduled backups done; hosting outstanding |
 | 11 | Assisted categorisation (LLM) | ◐ foundation done; receipt vision outstanding |
 
-**Phases 0–6, 8 and 9 complete; Phase 10's backup half is done.** 448 tests. Phase 7 (OCR) and
-hosting are what is left.
+**Phases 0–9 complete; Phase 10's backup half is done; Phase 11 (assisted categorisation) is
+in.** 496 tests. Hosting is the only substantial thing left.
 
 Frontend has ten screens — dashboard, transactions, analytics, insights, budgets, calendar,
 goals, simulator, import and data — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
@@ -67,6 +67,7 @@ live; routes only translate to and from integer minor units.
 | `domain/backup.py` | Atomic backup writes, retention, staleness (B-A/B-B/B-C) |
 | `scheduler.py` | The lifespan timer that calls it |
 | `domain/enrichment.py` | Merchant → category, cache-first (A1/A2/A3) |
+| `domain/receipts.py` | Reads a photographed receipt into a candidate (A1') |
 
 **Enforced in the database, not application code** (so it holds for raw SQL too):
 
@@ -104,6 +105,7 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X17 | A backup file restores to identical balances and net worth (B-B) | ✅ `test_backup.py::test_a_backup_file_restores` |
 | X18 | No model output can become a figure — only an existing category (A1) | ✅ `test_enrichment.py` — invented categories and numeric answers both resolve to none |
 | X19 | The app is unchanged with no API key (A3) | ✅ `test_enrichment.py` — import works, no network, no error |
+| X20 | A receipt reaches the ledger only through the candidate inbox (A1') | ✅ `test_receipts.py` — staging leaves balances and transaction count untouched |
 
 ### Assisted categorisation (Phase 11)
 
@@ -120,10 +122,14 @@ converges on zero rather than scaling with transaction count.
 The model may only pick a name from the category list supplied to it; anything else becomes no
 category (A1). There is no path by which model output becomes an amount, date or balance.
 
-**Recommended next task.** Phase 7 (OCR) or hosting. OCR is the expensive one — its
-candidate-inbox plumbing now exists so it is unblocked, but it needs a dependency decision that Phase 11 has now effectively made: with a client already
-wired, receipt reading is a vision call returning structured JSON, staged through the existing
-candidate inbox — not a Tesseract pipeline whose noisy text needs heuristic parsing. Hosting is
+**A1 and A1'.** Categorisation holds the strong form: the model picks from a supplied list and
+*cannot* produce a figure. Receipts cannot — the amount is the thing being read — so the
+invariant there is the weaker, honest one: **no model output reaches the ledger without a person
+confirming it.** A receipt becomes an `ImportCandidate` and passes the same gate a bank row does.
+That is why receipts reuse Phase 6's plumbing instead of adding a second route to the ledger.
+
+**Recommended next task.** Hosting. OCR is the expensive one — its
+candidate-inbox plumbing now exists so it is unblocked, but it needs a HTTPS in front of it and `COOKIE_SECURE=true`, as described above. Hosting is
 mostly the HTTPS/`COOKIE_SECURE` work already described above. The correctness and security debt
 below are both empty.
 

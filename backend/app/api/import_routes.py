@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import to_minor
 from app.db import get_session
-from app.domain import importing
+from app.domain import importing, receipts
 from app.models.enums import CandidateStatus
 from app.models.imports import ImportBatch, ImportCandidate
 
@@ -222,3 +222,32 @@ def reopen_candidate(
     except importing.ImportError_ as exc:
         session.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/import/receipt", response_model=CandidateOut, status_code=201)
+async def upload_receipt(
+    account_id: uuid.UUID = Form(...),
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+) -> CandidateOut:
+    """Read a photographed receipt into the same inbox a statement lands in.
+
+    A1': the result is a candidate. It posts nothing until someone accepts it,
+    which is the same gate every imported bank row passes through.
+    """
+    from app.domain.clock import today as clock_today
+
+    payload = await file.read()
+    try:
+        candidate = receipts.stage(
+            session,
+            filename=file.filename or "receipt.jpg",
+            image=payload,
+            media_type=file.content_type or "application/octet-stream",
+            account_id=account_id,
+            today=clock_today(session),
+        )
+    except receipts.ReceiptError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _candidate_out(candidate)

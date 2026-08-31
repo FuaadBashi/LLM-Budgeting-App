@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     #: Hard ceiling on a single reply. Categorisation answers are a few tokens;
     #: this is a runaway guard, not a target.
     llm_max_tokens: int = 256
+    #: Reading a receipt is a vision task and needs a more capable model than
+    #: classification does. Still the cheapest one that reads crumpled paper.
+    llm_vision_model: str = "claude-sonnet-5"
 
 
 settings = Settings()

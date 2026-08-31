@@ -6,6 +6,7 @@ import {
   acceptCandidate,
   rejectCandidate,
   reopenCandidate,
+  uploadReceipt,
   uploadStatement,
   type Account,
   type Category,
@@ -42,6 +43,7 @@ export function ImportInbox({
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<ImportBatch | null>(null);
+  const [receipt, setReceipt] = useState<string | null>(null);
 
   const statementAccounts = accounts.filter((a) => IMPORTABLE.has(a.kind));
   const expense = accounts.filter((a) => a.kind === "expense");
@@ -67,6 +69,29 @@ export function ImportInbox({
       router.refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function onReceipt(form: HTMLFormElement) {
+    const data = new FormData(form);
+    const file = data.get("file");
+    const accountId = String(data.get("account_id") ?? "");
+    if (!(file instanceof File) || !file.size || !accountId) return;
+    setError(null);
+    setReceipt(null);
+    setUploading(true);
+    try {
+      const staged = await uploadReceipt(accountId, file);
+      setReceipt(
+        `${staged.description} — ${formatMinor(Math.abs(staged.amount_minor))} on ` +
+          `${staged.booking_date}. Check it below before accepting.`,
+      );
+      form.reset();
+      router.refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not read that image.");
     } finally {
       setUploading(false);
     }
@@ -148,6 +173,64 @@ export function ImportInbox({
               style={{ background: "var(--accent)", color: "#fff", opacity: uploading ? 0.6 : 1 }}
             >
               {uploading ? "Reading…" : "Upload"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section>
+        <h2 className="section-label mb-3">Photograph a receipt</h2>
+        <form
+          className="card space-y-4 p-5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onReceipt(e.currentTarget);
+          }}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+              <span className="mb-1.5 block">Paid from</span>
+              <select name="account_id" required className="form-control" defaultValue="">
+                <option value="" disabled>Choose an account</option>
+                {statementAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
+              <span className="mb-1.5 block">Image</span>
+              <input
+                name="file"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                required
+                className="block w-full text-sm"
+                style={{ color: "var(--text-secondary)" }}
+              />
+            </label>
+          </div>
+
+          <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            The reading is a proposal, not a record — it lands below for you to check like
+            any imported row, and posts nothing until you accept it. An unreadable image is
+            refused rather than guessed at. Needs an API key; without one this will say it
+            could not read a total.
+          </p>
+
+          {receipt && (
+            <p className="text-sm" role="status" style={{ color: "var(--status-good)" }}>
+              ✓ {receipt}
+            </p>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={uploading}
+              className="rounded-full px-4 py-2 text-sm font-medium"
+              style={{ background: "var(--accent)", color: "#fff", opacity: uploading ? 0.6 : 1 }}
+            >
+              {uploading ? "Reading…" : "Read receipt"}
             </button>
           </div>
         </form>

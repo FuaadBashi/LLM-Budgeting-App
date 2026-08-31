@@ -511,6 +511,24 @@ export const rejectCandidate = (id: string) =>
 export const reopenCandidate = (id: string) =>
   post<ImportCandidate>(`/import/candidates/${id}/reopen`, {});
 
+/** A photographed receipt. Lands in the same inbox a statement does. */
+export async function uploadReceipt(
+  accountId: string,
+  file: File,
+): Promise<ImportCandidate> {
+  const body = new FormData();
+  body.append("account_id", accountId);
+  body.append("file", file);
+  const res = await fetch(`${BASE}/import/receipt`, {
+    method: "POST",
+    credentials: "include",
+    body,
+  });
+  const parsed = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(parsed?.detail ?? `upload failed (${res.status})`);
+  return parsed as ImportCandidate;
+}
+
 /** Multipart, so it cannot go through the JSON helper. */
 export async function uploadStatement(
   accountId: string,
