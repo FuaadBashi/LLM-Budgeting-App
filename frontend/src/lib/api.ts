@@ -185,6 +185,35 @@ export interface FinancialCalendar {
   days: CalendarDay[];
 }
 
+/**
+ * The session cookie, when this code is running on the server.
+ *
+ * `credentials: "include"` only means something in a browser. Server components
+ * run in Node with no cookie jar, so a server-side fetch is anonymous unless the
+ * incoming request's cookies are forwarded by hand. Without this the login
+ * succeeds, sets a cookie, and then the very next server render asks the API
+ * "am I authenticated?" without it -- and is told no, for ever.
+ *
+ * The import is dynamic and guarded because `next/headers` cannot be pulled
+ * into a client bundle.
+ */
+async function forwardedCookies(): Promise<Record<string, string>> {
+  if (typeof window !== "undefined") return {};
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    const header = store
+      .getAll()
+      .map((c) => `${c.name}=${c.value}`)
+      .join("; ");
+    return header ? { cookie: header } : {};
+  } catch {
+    // Outside a request scope (build-time prerender, say) there is nothing to
+    // forward, and that is not an error.
+    return {};
+  }
+}
+
 /** Thrown when the API says a session is required, so callers can redirect. */
 export class UnauthenticatedError extends Error {
   constructor() {
@@ -200,6 +229,7 @@ async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     cache: "no-store",
     credentials: "include",
+    headers: await forwardedCookies(),
   });
   if (res.status === 401) throw new UnauthenticatedError();
   if (!res.ok) throw new Error(`${path} responded ${res.status}`);
@@ -232,7 +262,7 @@ export async function logout(): Promise<void> {
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await forwardedCookies()) },
     credentials: "include",
     body: JSON.stringify(body),
   });

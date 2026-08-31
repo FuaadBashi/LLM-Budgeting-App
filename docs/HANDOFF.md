@@ -178,6 +178,11 @@ These are bugs already found and fixed. They will come back if the reasoning is 
   failed with 401. A suite whose result depends on local configuration tests the environment.
 - **`AUTH_PASSWORD_HASH` is not just a verifier in this design** — it also signs sessions, so it
   can mint one. See the security-debt note above.
+- **Server components have no cookie jar.** `credentials: "include"` does nothing in Node, so a
+  server-side fetch is anonymous unless the incoming request's cookies are forwarded by hand
+  (`lib/api.ts::forwardedCookies`). Without it, login *succeeds*, sets a cookie, and then the very
+  next server render asks "am I authenticated?" without it and is told no — for ever. The symptom
+  is a login form that silently reappears, which reads as a wrong password.
 - **Cross-origin fetches need `credentials: "include"`.** The API is a different origin, so
   without it the session cookie is never sent and every request looks anonymous.
 - **Two savings figures, not one.** `savings_rate` is `(income − spending) / income`, the standard
