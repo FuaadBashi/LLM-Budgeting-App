@@ -172,3 +172,29 @@ outputs so ledger, net worth, budget, accessibility, recovery and calendar contr
 - **Hosting and auth (Q23).** Local-only is fine now, but §14 of the plan lists HTTPS and
   access control, and the decision shapes deployment. Nothing here should be exposed to a
   network as it stands: there is no authentication.
+
+## Analytics and export (Phase 5). Decided 31 August 2026
+
+**Saving is a transfer, not spending and not income.** Counting it either way makes the savings
+rate a statement about account plumbing rather than behaviour, and breaks the identity that
+income − spending equals the change in net worth.
+
+**Savings rate is undefined without income**, not zero. "0% saved" and "no income this period"
+are different claims and must not render the same.
+
+**Exports are posting-level.** A transaction has no single amount, so a row-per-transaction CSV
+would have to invent one — and an invented figure is the one that stops reconciling.
+
+**Money crosses both export formats as decimal strings.** JSON has no decimal type; emitting
+numbers would round-trip through a float and change the figures a backup exists to preserve.
+
+**XLSX and PDF are deferred.** Plan §10 lists four formats; CSV and JSON carry the data and the
+other two are presentation.
+
+## Corrections (Phase 1 revisited). Decided 31 August 2026
+
+**Void is the correction path for a mis-entry**; a reversal is a separate mechanism for something
+that genuinely happened. Voiding a transaction that has already been reversed is rejected at the
+API rather than left to the L3 trigger, so the caller gets a 422 rather than a 500.
+
+**Voided rows are hidden by default but never deleted.** An audit trail you cannot see is not one.

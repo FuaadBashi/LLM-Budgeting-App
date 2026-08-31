@@ -14,20 +14,20 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 2 | Dashboard — KPIs, drill-down | ✅ |
 | 3 | Budget engine — periods, rollover, pace, recovery, warnings | ✅ |
 | 4 | Goals, obligations, recurrence, financial calendar | ✅ |
-| 5 | Analytics and export (CSV/XLSX/JSON/PDF) | ✗ |
+| 5 | Analytics and export (CSV + JSON; XLSX/PDF deferred) | ✅ |
 | 6 | Structured imports, candidate inbox, duplicate detection | ✗ |
 | 7 | OCR / vision ingestion | ✗ |
 | 8 | Simulation lab | ✗ |
 | 9 | Intelligence — explanations, recommendations | ✗ |
 | 10 | Polish, backups, hosting | ✗ |
 
-**Phases 0–4 are the MVP boundary the plan draws.** 235 tests.
+**Phases 0–5 complete.** 279 tests.
 
-Frontend is one screen (dashboard). The nav lists Transactions, Budgets, Calendar and Goals as
-`soon` — those routes do not exist. The Add button opens manual entry for expenses, income,
-transfers/debt payments and refunds. It builds a balanced two-leg transaction, supports category
-tagging for expense legs, and refreshes the dashboard after the write. There is no transaction
-history or correction UI yet.
+Frontend has two screens: the dashboard and `/transactions`. Budgets, Calendar and Goals are
+still `soon` and their nav items are disabled. The Add button records expenses, income,
+transfers/debt payments and refunds as balanced two-leg transactions. The transactions screen
+lists history, shows each row's effect on liquid cash, and offers Void as the correction path;
+voided rows are hidden by default and never deleted.
 
 ---
 
@@ -49,6 +49,10 @@ live; routes only translate to and from integer minor units.
 | `domain/recurrence.py` | RRULE building and expansion |
 | `domain/obligations.py` | Instance generation and transaction matching |
 | `domain/calendar.py` | Projected balance curve |
+| `domain/income.py` | Expected income occurrences, derived from the rule |
+| `domain/reimbursement.py` | Netting repayments out of budget spend |
+| `domain/impact.py` | W3 -- what one transaction did to a budget |
+| `domain/analytics.py` | Period and monthly summaries |
 | `domain/disposable.py` | Safe to spend, net worth, account balances |
 | `domain/classification.py` | Derived transaction type |
 
@@ -82,8 +86,8 @@ calendar. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points. Honest sta
 
 | X11 | Expected income: all engines derive occurrences from the rule | ✅ `test_income_occurrences.py` |
 
-**Recommended next task.** Implement reimbursement netting, then connect W3 to transaction
-posting. Both are listed under correctness debt below.
+**Recommended next task.** Authentication, then backup/restore — the two things blocking real
+use. The correctness debt below is now empty.
 
 ---
 
@@ -98,19 +102,19 @@ posting. Both are listed under correctness debt below.
 
 ### Correctness debt
 
-3. **Reimbursement netting is specified but not implemented.** `BUDGET_ENGINE_SPEC.md` M3 defines
-   pro-rata allocation with largest-remainder rounding; `Spent` currently ignores `reimburses_id`,
-   so a reimbursed work expense still consumes a budget.
-4. **W3 (`material_single_expense`) is implemented but never called.** It needs a before/after
-   allowance pair, which only a transaction-posting flow can supply.
+None outstanding. Reimbursement netting, W3 wiring and the expected-income drift are all closed,
+each with named tests.
 
 ### Product gaps
 
-5. Phase 5 analytics and export — its exit gate is "report numbers reconcile to ledger", which is
-   why the cross-engine work should come first.
-6. Transaction history/correction plus budget/goal/obligation management screens; the API supports
-   most of the underlying reads and writes, but the UI does not.
-7. `Budget.end_date` and `rollover_reset` work but no UI reaches them.
+3. Budget, goal and obligation management screens. The API supports the reads and writes; only
+   the dashboard and transactions list have a UI.
+4. `Budget.end_date` and `rollover_reset` work but no UI reaches them.
+5. XLSX and PDF export (plan §10 lists four formats; CSV and JSON are built).
+6. No analytics *screen* — `/analytics/period` and `/analytics/monthly` return the data, but
+   nothing renders it. This is the most visible remaining gap for a user.
+7. Transaction editing. Void plus re-enter is the only correction path; there is no edit for
+   non-monetary fields, which §2 of the rulebook permits.
 
 ### Goal integrity coverage
 
@@ -151,6 +155,9 @@ These are bugs already found and fixed. They will come back if the reasoning is 
   value and the two states must stay distinguishable.
 - **Elapsed + remaining = total + 1.** Today counts in both. Deriving one from the other is off
   by one every day and divides by zero on the last day of every period.
+- **Money crosses JSON as strings, never numbers.** A JSON number round-trips through a float.
+- **Exports are posting-level.** A transaction has no single amount; inventing one is what stops
+  a report reconciling.
 - **A stored "next X date" is a derived value and will drift.** `ExpectedIncome` once had
   `next_expected_date`; nothing advanced it, and two of its three readers took the name
   literally. Occurrences come from the rule. The column is `first_expected_date`, an anchor.

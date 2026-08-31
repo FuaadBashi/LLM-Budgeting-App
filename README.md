@@ -95,7 +95,8 @@ backend/
     models/      accounts, transactions, postings, budgets, goals, obligations
     domain/      clock, periods, categories, spend, budgets, projection,
                  budget_warnings, budget_recovery, recurrence, obligations,
-                 calendar, classification, disposable, money
+                 income, reimbursement, impact, analytics, calendar,
+                 classification, disposable, money
     api/         routes and the minor-unit boundary
   alembic/       migrations, including the L1 balance and L3 correction triggers
   scripts/       seed_demo.py
