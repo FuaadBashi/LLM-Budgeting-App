@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.budget_routes import router as budget_router
 from app.api.auth_routes import router as auth_router
 from app.api.export_routes import router as export_router
+from app.api.goal_routes import router as goal_router
 from app.api.obligation_routes import router as obligation_router
 from app.api.routes import router
 from app.auth import require_session, session_secret_warning, startup_warning
@@ -46,6 +47,7 @@ app.include_router(router, prefix="/api", dependencies=[Depends(require_session)
 app.include_router(budget_router, prefix="/api", dependencies=[Depends(require_session)])
 app.include_router(obligation_router, prefix="/api", dependencies=[Depends(require_session)])
 app.include_router(export_router, prefix="/api", dependencies=[Depends(require_session)])
+app.include_router(goal_router, prefix="/api", dependencies=[Depends(require_session)])
 
 
 
