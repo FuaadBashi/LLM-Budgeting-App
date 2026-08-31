@@ -192,6 +192,74 @@ export interface Obligation {
   active: boolean;
 }
 
+export interface ScenarioAssumptions {
+  monthly_income_minor: Minor;
+  monthly_fixed_costs_minor: Minor;
+  monthly_discretionary_minor: Minor;
+  monthly_savings_minor: Minor;
+  monthly_investment_minor: Minor;
+  annual_salary_growth: string;
+  annual_inflation: string;
+  income_loss_from_month: number | null;
+  income_loss_months: number;
+  one_offs: { month: number; amount_minor: Minor }[];
+}
+
+export interface Scenario {
+  id: string;
+  name: string;
+  baseline_date: string;
+  horizon_months: number;
+  assumptions: Partial<ScenarioAssumptions>;
+  notes: string;
+}
+
+export interface ScenarioMonth {
+  month: string;
+  income_minor: Minor;
+  fixed_costs_minor: Minor;
+  saved_minor: Minor;
+  invested_minor: Minor;
+  one_off_minor: Minor;
+  cash_balance_minor: Minor;
+  savings_balance_minor: Minor;
+  invested_contributions_minor: Minor;
+  below_buffer: boolean;
+}
+
+export interface InvestmentCase {
+  label: string;
+  annual_return: number;
+  /** Kept apart deliberately: one is a decision, the other is a hope. */
+  contributions_minor: Minor;
+  growth_minor: Minor;
+  value_minor: Minor;
+}
+
+export interface GoalProjection {
+  goal_id: string;
+  name: string;
+  target_minor: Minor;
+  monthly_contribution_minor: Minor;
+  completion_month: string | null;
+  /** Null means never reached at this rate — a statement, not a date. */
+  months_to_completion: number | null;
+}
+
+export interface ScenarioResult {
+  scenario_id: string;
+  name: string;
+  baseline_date: string;
+  opening_cash_minor: Minor;
+  protected_buffer_minor: Minor;
+  first_shortfall: string | null;
+  lowest_cash_minor: Minor;
+  lowest_cash_month: string | null;
+  months: ScenarioMonth[];
+  investment_cases: InvestmentCase[];
+  goals: GoalProjection[];
+}
+
 export interface NetWorth {
   net_worth_minor: Minor;
   as_of: string;
@@ -340,6 +408,23 @@ export const getBudgets = () => get<BudgetPeriod[]>("/dashboard/budgets");
 export const getRecovery = () => get<Recovery>("/dashboard/recovery");
 export const getNetWorth = () => get<NetWorth>("/dashboard/net-worth");
 export const getGoals = () => get<Goal[]>("/goals");
+export const getScenarios = () => get<Scenario[]>("/scenarios");
+export const getScenarioResult = (id: string) =>
+  get<ScenarioResult>(`/scenarios/${id}/result`);
+export const compareScenarios = (ids: string[]) =>
+  get<ScenarioResult[]>(`/scenarios/compare?ids=${ids.join(",")}`);
+export const createScenario = (body: unknown) => post<Scenario>("/scenarios", body);
+export const updateScenario = (id: string, body: unknown) =>
+  patch<Scenario>(`/scenarios/${id}`, body);
+
+export async function deleteScenario(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/scenarios/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: await forwardedCookies(),
+  });
+  if (!res.ok) throw new Error(`delete failed (${res.status})`);
+}
 export const getBudgetList = () => get<BudgetSummary[]>("/budgets");
 export const getObligations = () => get<Obligation[]>("/obligations");
 

@@ -31,6 +31,7 @@
   /* Categorical slots, fixed order. Slot 1/2 are the validated adjacent pair. */
   --series-1: #2a78d6;
   --series-2: #eb6834;
+  --series-3: #1baf7a;
 
   --status-good: #0ca30c;
   --status-warning: #fab219;
@@ -67,6 +68,7 @@
     --success-text: #0ca30c;
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #199e70;
     --shadow-card: none;
     --shadow-raised: 0 8px 24px rgba(0, 0, 0, 0.45);
   }
@@ -89,6 +91,7 @@
   --success-text: #0ca30c;
   --series-1: #3987e5;
   --series-2: #d95926;
+  --series-3: #199e70;
   --shadow-card: none;
   --shadow-raised: 0 8px 24px rgba(0, 0, 0, 0.45);
 }

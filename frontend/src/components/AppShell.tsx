@@ -28,6 +28,7 @@ const NAV: Item[] = [
   { key: "budgets", label: "Budgets", icon: <IconMeter />, href: "/budgets" },
   { key: "calendar", label: "Calendar", icon: <IconCalendar />, href: "/calendar" },
   { key: "goals", label: "Goals", icon: <IconTarget />, href: "/goals" },
+  { key: "simulator", label: "Simulator", icon: <IconFlask />, href: "/simulator" },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -254,6 +255,15 @@ function IconTarget() {
     <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden>
       <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.5" />
       <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function IconFlask() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+      <path d="M8 2.5v5L3.8 15a1.5 1.5 0 0 0 1.3 2.3h9.8a1.5 1.5 0 0 0 1.3-2.3L12 7.5v-5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7 2.5h6M5.6 12h8.8" strokeLinecap="round" />
     </svg>
   );
 }

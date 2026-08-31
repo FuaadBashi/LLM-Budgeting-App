@@ -17,14 +17,14 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 5 | Analytics and export (CSV + JSON; XLSX/PDF deferred) | ✅ |
 | 6 | Structured imports, candidate inbox, duplicate detection | ✗ |
 | 7 | OCR / vision ingestion | ✗ |
-| 8 | Simulation lab | ✗ |
+| 8 | Simulation lab | ✅ |
 | 9 | Intelligence — explanations, recommendations | ✗ |
 | 10 | Polish, backups, hosting | ✗ |
 
-**Phases 0–5 complete.** 338 tests.
+**Phases 0–5 and 8 complete.** 361 tests.
 
-Frontend has six screens — dashboard, transactions, analytics, budgets, calendar and goals — and
-every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
+Frontend has seven screens — dashboard, transactions, analytics, budgets, calendar, goals and
+simulator — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
 The Add button records expenses, income, transfers/debt payments and refunds as balanced two-leg
 transactions. The transactions screen
 lists history, shows each row's effect on liquid cash, and offers Void as the correction path;
@@ -58,6 +58,7 @@ live; routes only translate to and from integer minor units.
 | `auth.py` | Password hashing, session cookies, the route guard |
 | `domain/disposable.py` | Safe to spend, net worth, account balances |
 | `domain/classification.py` | Derived transaction type |
+| `domain/simulation.py` | Scenario projection; reads the ledger, writes nothing (P1) |
 
 **Enforced in the database, not application code** (so it holds for raw SQL too):
 
@@ -71,8 +72,8 @@ live; routes only translate to and from integer minor units.
 
 ## 3. Cross-engine agreement
 
-Five engines can now disagree about the same money: ledger, safe-to-spend, budgets, recovery,
-calendar. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points. Honest status:
+Six engines can now disagree about the same money: ledger, safe-to-spend, budgets, recovery,
+calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points. Honest status:
 
 | # | Risk | Guard test? |
 |---|---|---|
@@ -86,11 +87,12 @@ calendar. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points. Honest sta
 | X8 | One implementation of the S1 clamp | ✅ Integration and AST source-policy guards |
 | X9 | `date.today()` banned in `app/` | ✅ AST source-policy guard |
 | X10 | `TotalAccessible` releases flexible balance and unmade contribution | ✅ Named regression plus golden month |
-
 | X11 | Expected income: all engines derive occurrences from the rule | ✅ `test_income_occurrences.py` |
+| X12 | Simulation reads the ledger and never writes to it (P1) | ✅ `test_simulation.py` asserts balances, net worth and transaction count are unchanged after run/fetch/compare |
 
-**Recommended next task.** Authentication, then backup/restore — the two things blocking real
-use. The correctness debt below is now empty.
+**Recommended next task.** Phase 6 (structured imports). It is the last thing standing between
+manual entry and real daily use, and Phase 7 depends on its candidate-inbox plumbing. The
+correctness and security debt below are both empty.
 
 ---
 
@@ -125,8 +127,10 @@ each with named tests.
 ### Product gaps
 
 1. Deleting. Budgets, goals and commitments can be created and edited, and archived via an
-   active flag, but there is no delete — which is probably correct for a ledger-adjacent app,
-   though nothing says so explicitly yet.
+   active flag, but never deleted: they are referenced by history, so removing one would change
+   what a closed period meant. Scenarios are the single exception — they are hypotheticals with
+   no audit trail to preserve, so `DELETE /scenarios/{id}` exists and the UI offers it. The rule
+   is stated in `scenario_routes.delete_scenario`.
 2. `rollover_reset` works but no UI reaches it, and a budget's period/anchor cannot be changed
    after creation (deliberately — that reshapes every historical boundary).
 3. XLSX and PDF export (plan §10 lists four formats; CSV — both posting-level and summary — and
@@ -163,6 +167,12 @@ reconciles these engines with the ledger, budget and calendar for one complete m
 
 These are bugs already found and fixed. They will come back if the reasoning is lost.
 
+- **Stepping a date month by month ratchets.** Once a 31st clamps to the 28th in February it
+  never recovers. `simulation._add_months` always measures from the original date via the
+  `(year, month)` ordinal; the budget engine does the same. Never add a month to the last result.
+- **The simulator's third series is aqua, which sits under 3:1 on the light surface.** The
+  palette's relief rule makes the table toggle in `ScenarioChart` mandatory, not a nicety.
+  Removing it breaks the accessibility contract even though nothing will fail to compile.
 - **`Decimal("-7") // Decimal("2")` is `-3`**, while `-7 // 2` is `-4`. Decimal floor division
   truncates toward zero. Never use `//` on money — `floor_money` exists for this.
 - **RFC 5545 skips, it does not clamp.** `BYMONTHDAY=31` drops five months a year.
