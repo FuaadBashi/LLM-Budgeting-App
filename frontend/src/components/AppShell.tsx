@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { TransactionEntry } from "@/components/TransactionEntry";
 
 /**
  * Navigation chrome. Plan section 11.1.
@@ -49,7 +50,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
 
-        <AddButton className="mt-4 w-full justify-center" />
+        <TransactionEntry className="mt-4 w-full justify-center" />
       </aside>
 
       <div className="lg:pl-60">
@@ -87,7 +88,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         ))}
       </nav>
 
-      <AddButton className="fixed bottom-20 right-4 z-20 shadow-lg lg:hidden" />
+      <TransactionEntry className="fixed bottom-20 right-4 z-20 shadow-lg lg:hidden" />
     </div>
   );
 }
@@ -123,28 +124,6 @@ function BottomLink({ item }: { item: Item }) {
       {item.icon}
       {item.label}
     </span>
-  );
-}
-
-function AddButton({ className = "" }: { className?: string }) {
-  return (
-    <button
-      type="button"
-      disabled
-      title="Transaction entry is not built yet"
-      className={`flex items-center gap-2 rounded-full px-4 py-3 text-sm font-medium ${className}`}
-      style={{ background: "var(--accent)", color: "#ffffff", opacity: 0.55 }}
-    >
-      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden fill="none">
-        <path
-          d="M8 3v10M3 8h10"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-        />
-      </svg>
-      Add
-    </button>
   );
 }
 

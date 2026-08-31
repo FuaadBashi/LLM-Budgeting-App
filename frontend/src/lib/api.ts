@@ -10,6 +10,7 @@ export interface SafeToSpend {
   protected_buffer_minor: Minor;
   remaining_planned_minor: Minor;
   unprotected_savings_minor: Minor;
+  flexible_planned_release_minor: Minor;
   window_end: string;
   /** Label plus signed contribution. Sums exactly to safe_to_spend_minor. */
   breakdown: [string, Minor][];
@@ -21,6 +22,35 @@ export interface Account {
   kind: string;
   currency: string;
   balance_minor: Minor;
+}
+
+export interface Category {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  nature: "essential" | "discretionary";
+}
+
+export interface PostingInput {
+  account_id: string;
+  amount_minor: Minor;
+  category_id?: string | null;
+}
+
+export interface TransactionInput {
+  booking_date: string;
+  description: string;
+  merchant?: string | null;
+  postings: PostingInput[];
+}
+
+export interface Transaction {
+  id: string;
+  booking_date: string;
+  description: string;
+  merchant: string | null;
+  classification: string;
+  postings: (PostingInput & { id: string; category_id: string | null })[];
 }
 
 export interface Warning {
@@ -126,8 +156,35 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => null)) as
+      | { detail?: string | { msg?: string }[] }
+      | null;
+    const detail = Array.isArray(payload?.detail)
+      ? payload.detail.map((item) => item.msg).filter(Boolean).join("; ")
+      : payload?.detail;
+    throw new Error(
+      typeof detail === "string" && detail
+        ? detail
+        : `${path} responded ${res.status}`,
+    );
+  }
+
+  return res.json() as Promise<T>;
+}
+
 export const getSafeToSpend = () => get<SafeToSpend>("/dashboard/safe-to-spend");
 export const getAccounts = () => get<Account[]>("/accounts");
+export const getCategories = () => get<Category[]>("/categories");
+export const createTransaction = (input: TransactionInput) =>
+  post<Transaction>("/transactions", input);
 export const getBudgets = () => get<BudgetPeriod[]>("/dashboard/budgets");
 export const getRecovery = () => get<Recovery>("/dashboard/recovery");
 export const getNetWorth = () => get<NetWorth>("/dashboard/net-worth");

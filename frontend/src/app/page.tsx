@@ -136,8 +136,8 @@ export default async function Dashboard() {
                   : "Spendable without breaking any plan."
               }
               footnote={
-                sts.unprotected_savings_minor > 0
-                  ? `${formatMinor(sts.total_accessible_minor)} accessible if flexible savings are used.`
+                sts.unprotected_savings_minor + sts.flexible_planned_release_minor > 0
+                  ? `${formatMinor(sts.total_accessible_minor)} accessible if flexible savings plans are released.`
                   : undefined
               }
             />

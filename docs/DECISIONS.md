@@ -148,11 +148,27 @@ happen would overstate what the data supports.
 **Future-dated posted transactions appear on the curve** but not in `account_balances(as_of=today)`.
 They are real ledger entries; excluding them would make the curve contradict its own opening balance.
 
+## Goal integrity and accessibility. Decided 31 August 2026
+
+**Raiding a flexible goal releases two reservations.** `TotalAccessible` adds both the goal's
+existing attributed balance and its unmade current-period contribution back to `SafeToSpend`.
+Releasing only the balance understates accessible cash; the outstanding contribution already
+reduced `SafeToSpend` and must be released too.
+
+**Goal attribution is enforced at the database boundary.** A deferred constraint trigger checks
+that total attribution never exceeds the linked savings account's derived balance, and a goal may
+only link to a `SAVINGS` account. Deferral lets related writes settle within one transaction while
+still covering ORM, scripts and raw SQL at commit.
+
+**Goal-plan conflicts use the recovery result as their explicit surface.** `gap`, ordered flexible
+sacrifices and protected shortfall show which plans cannot coexist; no separate feasibility engine
+is introduced.
+
+**The golden month is data, not test code.** `august_2026.yaml` holds hand-calculated inputs and
+outputs so ledger, net worth, budget, accessibility, recovery and calendar contracts move together.
+
 ## Open, and worth deciding before Phase 5
 
 - **Hosting and auth (Q23).** Local-only is fine now, but §14 of the plan lists HTTPS and
   access control, and the decision shapes deployment. Nothing here should be exposed to a
   network as it stands: there is no authentication.
-- **Goal attribution enforcement (G1).** The invariant is written and tested at the application
-  level; whether to make it a database constraint is unresolved.
-- **Recurrence engine.** RRULE semantics are specified but not implemented. Needed for Phase 4.

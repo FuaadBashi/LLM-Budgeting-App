@@ -21,11 +21,13 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 9 | Intelligence — explanations, recommendations | ✗ |
 | 10 | Polish, backups, hosting | ✗ |
 
-**Phases 0–4 are the MVP boundary the plan draws.** 209 tests.
+**Phases 0–4 are the MVP boundary the plan draws.** 224 tests.
 
 Frontend is one screen (dashboard). The nav lists Transactions, Budgets, Calendar and Goals as
-`soon` — those routes do not exist. The Add button is disabled: **there is no UI for entering a
-transaction.** Everything is entered through the API or the seed script.
+`soon` — those routes do not exist. The Add button opens manual entry for expenses, income,
+transfers/debt payments and refunds. It builds a balanced two-leg transaction, supports category
+tagging for expense legs, and refreshes the dashboard after the write. There is no transaction
+history or correction UI yet.
 
 ---
 
@@ -54,32 +56,32 @@ live; routes only translate to and from integer minor units.
 
 - `L1` — postings sum to zero, and at least two legs (deferred trigger)
 - `L3` — a transaction cannot be both voided and reversed (deferred trigger)
+- `G1` — goal attribution cannot exceed its savings account balance (deferred trigger)
 - `B-CFG1/2` — daily budgets cannot roll over; a revision cannot predate its budget
 - CHECKs — anchor iff fortnightly, end ≥ start, no self-parent category, GBP-only postings
 
 ---
 
-## 3. Cross-engine agreement — the main outstanding risk
+## 3. Cross-engine agreement
 
 Five engines can now disagree about the same money: ledger, safe-to-spend, budgets, recovery,
 calendar. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points. Honest status:
 
 | # | Risk | Guard test? |
 |---|---|---|
-| X1 | §4 must gain no budget-overspend term (would double-count) | ⚠️ No direct test — relies on the term simply not existing |
-| X2 | Card-funded overspend moves budget `Spent` but not cash | ⚠️ Partial — spend side tested, cash side not asserted |
-| X3 | Budget `Spent` and `account_balances` must read the same transaction set | ⚠️ Partial — each tested separately, never compared |
+| X1 | §4 must gain no budget-overspend term (would double-count) | ✅ `test_cross_engine_guards.py` |
+| X2 | Card-funded overspend moves budget `Spent` but not cash | ✅ `test_cross_engine_guards.py` |
+| X3 | Budget `Spent` and `account_balances` must read the same transaction set | ✅ Shared `posted_transaction_ids` selector plus integration test |
 | X4 | Void semantics identical across engines | ✅ `test_corrections.py` |
 | X5 | Future-dated transactions: deliberate divergence | ✅ Both sides tested |
 | X6 | Goal period ≠ budget period | ✅ Implicit in `horizon_for` tests |
 | X7 | Near-term window ≠ recovery horizon | ✅ `test_budget_recovery.py` |
-| X8 | One implementation of the S1 clamp | ⚠️ `planned_contributions_split` is shared, but nothing forbids a second |
-| X9 | `date.today()` banned in `app/` | ⚠️ True today; no test enforces it |
-| X10 | `TotalAccessible` under-adds flexible contributions | ✗ Open §4 question, untested |
+| X8 | One implementation of the S1 clamp | ✅ Integration and AST source-policy guards |
+| X9 | `date.today()` banned in `app/` | ✅ AST source-policy guard |
+| X10 | `TotalAccessible` releases flexible balance and unmade contribution | ✅ Named regression plus golden month |
 
-**Recommended next task.** Close X1, X2, X3, X8, X9 with guard tests, and decide X10. X9 is a
-five-line grep test. X3 is the valuable one: assert both engines resolve the same transaction ids
-for a period.
+**Recommended next task.** Advance `ExpectedIncome.next_expected_date` when income is fulfilled.
+After that, implement reimbursement netting and connect W3 to transaction posting.
 
 ---
 
@@ -87,45 +89,37 @@ for a period.
 
 ### Blocking real use
 
-1. **No transaction entry UI.** The Add button is disabled. Nothing can be recorded without curl
-   or the seed script. This is the single biggest gap between "works" and "usable".
-2. **No authentication.** §14 of the plan asks for at least local access control and HTTPS before
+1. **No authentication.** §14 of the plan asks for at least local access control and HTTPS before
    anything leaves the machine.
-3. **No backup/restore.** §14 wants an automated restore test before trusting it with real
+2. **No backup/restore.** §14 wants an automated restore test before trusting it with real
    history.
 
 ### Correctness debt
 
-4. Cross-engine guard tests (§3 above).
-5. **Golden fixtures.** Rulebook §12 promises hand-calculated months in
-   `backend/tests/fixtures/golden/` as version-controlled YAML. The directory exists and is
-   empty; the suite proves invariants but nothing pins a whole month end to end.
-6. **`ExpectedIncome.next_expected_date` never advances.** Recurrence expands it for projections,
+3. **`ExpectedIncome.next_expected_date` never advances.** Recurrence expands it for projections,
    but the stored column is not rolled forward when a salary posts, so it eventually sits in the
    past. Harmless for the curve, wrong for the near-term window over time.
-7. **Reimbursement netting is specified but not implemented.** `BUDGET_ENGINE_SPEC.md` M3 defines
+4. **Reimbursement netting is specified but not implemented.** `BUDGET_ENGINE_SPEC.md` M3 defines
    pro-rata allocation with largest-remainder rounding; `Spent` currently ignores `reimburses_id`,
    so a reimbursed work expense still consumes a budget.
-8. **W3 (`material_single_expense`) is implemented but never called.** It needs a before/after
+5. **W3 (`material_single_expense`) is implemented but never called.** It needs a before/after
    allowance pair, which only a transaction-posting flow can supply.
 
 ### Product gaps
 
-9. Phase 5 analytics and export — its exit gate is "report numbers reconcile to ledger", which is
+6. Phase 5 analytics and export — its exit gate is "report numbers reconcile to ledger", which is
    why the cross-engine work should come first.
-10. Budget/goal/obligation management screens; the API supports them, the UI does not.
-11. `Budget.end_date` and `rollover_reset` work but no UI reaches them.
+7. Transaction history/correction plus budget/goal/obligation management screens; the API supports
+   most of the underlying reads and writes, but the UI does not.
+8. `Budget.end_date` and `rollover_reset` work but no UI reaches them.
 
-### The rulebook currently overstates coverage
+### Goal integrity coverage
 
-§12 of the rulebook lists `G1` (attribution ≤ account balance) and `G2` (goal conflict surfaced)
-as named tests. **Neither exists.** `SavingsGoal.attributed_balance` is computed and read, but
-nothing checks that the attributions against a savings account sum to no more than its balance,
-and nothing prevents over-attribution. `G2` is arguably satisfied in behaviour by the recovery
-engine's gap and sacrifice reporting, but there is no test asserting it.
-
-Either implement both, or amend §12 — a rulebook that claims a test which does not exist is worse
-than one that admits the gap, because it is the document everything else is checked against.
+`G1` is enforced by a deferred database trigger across contribution edits, goal-account changes
+and balance-changing ledger writes; it also rejects links to non-savings accounts. A direct-SQL
+regression proves the rule is not ORM-specific. `G2` has a named test that pins the recovery gap,
+flexible sacrifice order and projected contribution total. The August golden fixture then
+reconciles these engines with the ledger, budget and calendar for one complete month.
 
 ### Known sharp edges
 
@@ -138,6 +132,8 @@ than one that admits the gap, because it is the document everything else is chec
   it, so a bad payload gets a 422, not a silent default.
 - **Only `POSTED` transactions count anywhere.** `CANDIDATE` exists for Phase 6 and is invisible
   to every engine today.
+- **G1 is deferred until commit.** An invalid goal or balance-changing write may flush before the
+  database rejects the transaction at commit; callers must handle the rollback.
 
 ---
 

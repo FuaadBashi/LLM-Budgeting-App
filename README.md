@@ -18,7 +18,8 @@ Three documents govern the code:
 
 **Phases 0–4 complete — the MVP boundary the plan draws.** It can replace a spreadsheet: record
 transactions, manage balances, track budgets with rollover, save toward goals, and see upcoming
-cash flow against a protected buffer. 209 tests.
+cash flow against a protected buffer. Manual transaction entry is available from the dashboard.
+224 tests.
 
 Not built: analytics and export (Phase 5), CSV/statement import (6), OCR (7), simulation (8),
 recommendations (9).
@@ -101,7 +102,7 @@ backend/
   tests/unit/    one module per invariant group
 frontend/
   src/lib/       API client, minor-unit money formatting
-  src/components/ app shell, stat tiles, budget card and meter, balance curve
+  src/components/ app shell, transaction entry, stat tiles, budget card and meter, balance curve
   src/app/       dashboard
 docs/
 ```

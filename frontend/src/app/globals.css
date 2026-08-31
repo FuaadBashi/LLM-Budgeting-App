@@ -119,6 +119,27 @@ body {
   color: var(--text-muted);
 }
 
+.form-control {
+  width: 100%;
+  min-height: 2.75rem;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  padding: 0.625rem 0.75rem;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.form-control:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.form-control::placeholder {
+  color: var(--text-muted);
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .card,
   .navlink {

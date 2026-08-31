@@ -110,39 +110,17 @@ export function BudgetCard({ budget }: { budget: BudgetPeriod }) {
         severity={severity}
       />
 
-      <dl className="mt-4 grid grid-cols-3 gap-3 text-sm">
-        <div>
-          <dt className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Spent
-          </dt>
-          <dd className="tnum" style={{ color: "var(--text-primary)" }}>
-            {formatMinor(budget.spent_minor)}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Remaining
-          </dt>
-          <dd
-            className="tnum"
-            style={{
-              color:
-                budget.remaining_minor < 0
-                  ? "var(--status-critical)"
-                  : "var(--text-primary)",
-            }}
-          >
-            {formatMinor(budget.remaining_minor)}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Carried in
-          </dt>
-          <dd className="tnum" style={{ color: "var(--text-primary)" }}>
-            {formatMinor(budget.rollover_in_minor)}
-          </dd>
-        </div>
+      {/* Rows on narrow screens, columns once there is room. Three columns of
+          seven-figure amounts do not fit 375px: the values were clipped mid-digit,
+          which reads as a smaller number rather than as damage. */}
+      <dl className="mt-4 flex flex-col gap-2 text-sm sm:grid sm:grid-cols-3 sm:gap-3">
+        <Stat label="Spent" value={formatMinor(budget.spent_minor)} />
+        <Stat
+          label="Remaining"
+          value={formatMinor(budget.remaining_minor)}
+          tone={budget.remaining_minor < 0 ? "var(--status-critical)" : undefined}
+        />
+        <Stat label="Carried in" value={formatMinor(budget.rollover_in_minor)} />
       </dl>
 
       {(fired.length > 0 || unevaluated.length > 0) && (
@@ -208,5 +186,31 @@ export function BudgetCard({ budget }: { budget: BudgetPeriod }) {
         </table>
       </details>
     </article>
+  );
+}
+
+
+/** One figure with its label: a row on mobile, a stacked cell from `sm` up. */
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 sm:block">
+      <dt className="text-xs whitespace-nowrap" style={{ color: "var(--text-muted)" }}>
+        {label}
+      </dt>
+      <dd
+        className="tnum tabular-nums sm:mt-0.5"
+        style={{ color: tone ?? "var(--text-primary)" }}
+      >
+        {value}
+      </dd>
+    </div>
   );
 }

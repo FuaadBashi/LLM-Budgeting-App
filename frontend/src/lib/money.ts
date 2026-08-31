@@ -36,3 +36,14 @@ export function formatSignedMinor(minor: Minor): string {
 export function isNegative(minor: Minor): boolean {
   return minor < 0;
 }
+
+/** Parse a user-entered GBP amount without routing money through a float. */
+export function parseMajorToMinor(value: string): Minor | null {
+  const match = value.trim().match(/^\+?(\d+)(?:\.(\d{1,2}))?$/);
+  if (!match) return null;
+
+  const pounds = Number(match[1]);
+  const pence = Number((match[2] ?? "").padEnd(2, "0"));
+  const minor = pounds * 100 + pence;
+  return Number.isSafeInteger(minor) ? minor : null;
+}

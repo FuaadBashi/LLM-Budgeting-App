@@ -127,12 +127,17 @@ SafeToSpend         = Cash − NearTermCommitted − ProtectedBuffer − Remaini
 ```
 
 ```
-UnprotectedSavings  = Σ attributed balances of goals whose priority is not protected
-TotalAccessible     = SafeToSpend + UnprotectedSavings
+UnprotectedSavings       = Σ attributed balances of goals whose priority is not protected
+FlexiblePlannedRelease   = Σ over unprotected goals of
+                             max(0, planned_this_period − contributed_this_period)
+TotalAccessible          = SafeToSpend + UnprotectedSavings + FlexiblePlannedRelease
 ```
 
 `SafeToSpend` answers *"what can I spend without breaking any plan?"*
-`TotalAccessible` answers *"what could I spend if I raided flexible savings?"*
+`TotalAccessible` answers *"what could I spend if I raided flexible savings and released those
+plans for the current period?"* Raiding a flexible goal unlocks both its existing attributed
+balance and the contribution that has not yet been made. `FlexiblePlannedRelease` uses the same
+S1 clamp as `RemainingPlanned`; there is no second implementation of that rule.
 
 **Invariant S1:** `RemainingPlanned` subtracts only contributions **not yet made** this period.
 Once a planned £500 transfer is posted, the money has already left `Cash`; subtracting the
@@ -212,10 +217,13 @@ under-saving warning possible — there is a concrete commitment to miss.
 | `protected` | Defaults from priority; user-overridable |
 
 **Invariant G1:** for each savings account, `Σ attributed_balance ≤ account balance`.
-Unattributed savings is a valid state; over-attribution is not.
+Unattributed savings is a valid state; over-attribution is not. A non-null goal account must be a
+savings account. Both rules are deferred database constraints, so contribution edits, goal
+reassignment and ledger changes are checked together at commit, including raw SQL writes.
 
 **Invariant G2:** when `Σ planned_contribution` exceeds projected disposable cash, the conflict
-is surfaced explicitly. Goals are never silently shown as simultaneously achievable.
+is surfaced explicitly through the recovery `gap`, ordered flexible sacrifices and any protected
+shortfall. Goals are never silently shown as simultaneously achievable.
 
 ---
 
@@ -308,14 +316,13 @@ Every invariant above is a named test. The complete set:
 `N1` transfer preserves net worth · `S1` no double-count of fulfilled contributions ·
 `S2` negative safe-to-spend is representable · `O1` fulfilled obligation leaves forecast ·
 `D1` bucketing uses booking_date · `B1` Spent is an expense-leg sum · `B2` no allowance the cash
-position denies
+position denies · `G1` attribution never exceeds its savings balance · `G2` goal conflict is
+surfaced explicitly
 
-**Not yet covered.** `G1` (attribution ≤ account balance) and `G2` (goal conflict surfaced) are
-defined in §7 but have no enforcement and no test. `R1` (cache rebuild is a no-op) holds
-trivially — nothing is cached — and will need a real test when caching arrives. `P1` (simulation
-never mutates actuals) awaits Phase 8. Listed here rather than silently omitted: a rulebook that
-implies coverage it does not have is worse than one that names the gap.
+`R1` (cache rebuild is a no-op) holds trivially — nothing is cached — and will need a real test
+when caching arrives. `P1` (simulation never mutates actuals) awaits Phase 8.
 
 Golden fixtures (§15.5 of the plan) live in `backend/tests/fixtures/golden/` as version-controlled
 YAML — hand-calculated months where every balance, budget, goal and projection is known. They are
-data, not code, and run on every change.
+data, not code, and run on every change. `august_2026.yaml` reconciles account balances, net worth,
+budget spend and allowance, goals, both accessibility figures, recovery and the financial calendar.

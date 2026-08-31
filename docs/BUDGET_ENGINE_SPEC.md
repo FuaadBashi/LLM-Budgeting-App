@@ -714,7 +714,7 @@ Every place the budget engine can contradict `app/domain/disposable.py`. Each ha
 | X7 | Horizon reuse | `near_term_window_end` (payday) ≠ `H` (month end). Call `near_term_committed(session, today, H)` — reuse the function, recompute the value. |
 | X8 | Two implementations of `max(0, planned − contributed)` | **Forbidden.** Add `planned_contributions_split(session, today) -> (protected, flexible, per_goal)` to `disposable.py` and have both §4 and M8 call it. One implementation of S1's clamp, or they will drift. |
 | X9 | Source of "today" | `clock.py::today(session)` only. `date.today()` and bare `datetime.now()` banned in `app/domain` and `app/api`, enforced by grep test T-D1-2. Already true; keep it true. |
-| X10 | `TotalAccessible` under-adds flexible contributions | §4 adds back only `attributed_balance`, so raiding a flexible goal appears to free £100 less than it does. **Do not change §4 in Phase 3** — it would break `test_total_accessible_includes_flexible_savings_but_not_protected`. M8 computes what a sacrifice frees internally (`balance + unmade contribution`) without touching `total_accessible`. Logged as an open §4 question. |
+| X10 | `TotalAccessible` under-adds flexible contributions | Phase 3 deliberately left this open. **Resolved after Phase 4:** §4 now releases both `attributed_balance` and the unmade current-period contribution, using the shared S1 clamp. A named regression and the golden month pin the decision. |
 
 ---
 
@@ -924,7 +924,10 @@ Style follows `backend/tests/unit/`: module-level `TODAY`, `post()` from `tests.
 | `test_clock.py` | `test_D1_domain_code_never_calls_bare_date_today` — walk every `.py` under `backend/app/domain` and `backend/app/api`; zero matches for `date.today()` or `datetime.now()` without an argument. Currently passes; this is the regression lock |
 | `test_api.py` | `test_occurred_at_defaults_to_local_noon` — `booking_date 2026-08-31` with no `occurred_at` round-trips to `2026-08-31` in Europe/London, America/New_York and America/Los_Angeles. UTC midnight round-trips to 08-30 in the last two |
 
-**Golden fixtures** (`backend/tests/fixtures/golden/`, per §15.5): add `budget_2026_08.yaml` — a hand-calculated August with a `positive_only` monthly budget carrying £100 in, a mid-period revision, one refund, one candidate import and one obligation-linked bill, with every `rollover_in`, `spent`, `remaining`, `base_allowance` and warning code written out.
+**Golden fixtures** (`backend/tests/fixtures/golden/`, per §15.5): `august_2026.yaml` is the first
+complete cross-engine fixture. It pins balances, net worth, budget spend and presented allowance,
+Safe to Spend, Total Accessible, goal recovery and the projected calendar. More specialised budget
+rollover fixtures can extend it without embedding expected values in test code.
 
 ---
 
@@ -938,7 +941,7 @@ Style follows `backend/tests/unit/`: module-level `TODAY`, `post()` from `tests.
 | **`Account.default_category_id`** | Fixes loan interest, bank fees and untagged rent landing in the discretionary bucket. Needs a schema column, a write-time stamping path and a backfill. £50 of contractually unavoidable interest consuming 8.3% of a £600 discretionary budget is real but not blocking; Phase 4, alongside the category work. |
 | **`Budget.rollover_cap`** | The FULL floor and the `AllowanceBase` cap already handle every failure mode in evidence. Another knob without a demonstrated need. |
 | **Recurrence-aware goal projection** | `test_goal_miss_report_amount_and_days` assumes contributions land on the last day of each calendar month. Real RRULE-driven contribution dates arrive with the Phase 4 recurrence engine (already flagged open in DECISIONS). |
-| **`TotalAccessible` add-back of flexible planned contributions** | §4 currently adds back only `attributed_balance`, understating what raiding a flexible goal frees by that goal's unmade contribution. Fixing it changes `test_total_accessible_includes_flexible_savings_but_not_protected`, which is an existing contract. M8 computes the correct figure internally; the §4 change is a separate, deliberate decision. |
+| **`TotalAccessible` add-back of flexible planned contributions** | **Resolved after Phase 4.** The deliberate decision is to release both attributed balance and the unmade flexible contribution. §4, the API, the dashboard note, a named X10 regression and the golden month now agree. |
 | **Multi-currency** | §1 declares GBP-only for v1. `ck_posting_currency_gbp` makes the assumption enforced rather than assumed; lifting it is a Phase 8+ project. |
 | **`SavingsGoal` contribution period configurability** | `remaining_planned_contributions` hardcodes the calendar month. The budget engine takes that as given (X6). Making it configurable is a Phase 4 goals concern. |
 

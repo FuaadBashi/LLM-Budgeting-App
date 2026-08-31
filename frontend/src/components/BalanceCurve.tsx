@@ -6,10 +6,28 @@ import { formatMinor, formatSignedMinor } from "@/lib/money";
 
 const W = 720;
 const H = 220;
-const PAD = { top: 16, right: 16, bottom: 28, left: 64 };
+const AXIS_FONT = 10;
+//: Approximate advance width per character at AXIS_FONT in the system sans. Only
+//: needs to be close -- it sizes a gutter, it does not position anything.
+const CHAR_W = 5.7;
+const PAD_TOP = 16;
+const PAD_RIGHT = 16;
+const PAD_BOTTOM = 28;
 
-const PLOT_W = W - PAD.left - PAD.right;
-const PLOT_H = H - PAD.top - PAD.bottom;
+const PLOT_H = H - PAD_TOP - PAD_BOTTOM;
+
+/**
+ * Left gutter wide enough for the widest y-axis label actually rendered.
+ *
+ * A fixed gutter is fine until the numbers are not: at a −£4,552,654.15 balance
+ * the label is about 85px wide against a 64px gutter, so it rendered off the
+ * left edge of the viewBox and was silently clipped to ",552,654.15" -- a
+ * number that reads as a real, much smaller figure rather than as damage.
+ */
+function leftGutter(labels: string[]): number {
+  const widest = labels.reduce((n, l) => Math.max(n, l.length), 0);
+  return Math.min(160, Math.max(48, Math.ceil(widest * CHAR_W) + 12));
+}
 
 function shortDate(iso: string): string {
   const [, m, d] = iso.split("-");
@@ -59,8 +77,16 @@ export function BalanceCurve({
   const hi = rawHi + headroom;
   const span = hi - lo || 1;
 
-  const x = (i: number) => PAD.left + (i / (days.length - 1)) * PLOT_W;
-  const y = (v: number) => PAD.top + PLOT_H - ((v - lo) / span) * PLOT_H;
+  // The y labels drive the gutter, so they are resolved before the scales.
+  const yLabels = (rawLo === bufferMinor ? [rawHi] : [rawHi, rawLo]).map((v) => ({
+    value: v,
+    text: formatMinor(v),
+  }));
+  const padLeft = leftGutter(yLabels.map((l) => l.text));
+  const PLOT_W = W - padLeft - PAD_RIGHT;
+
+  const x = (i: number) => padLeft + (i / (days.length - 1)) * PLOT_W;
+  const y = (v: number) => PAD_TOP + PLOT_H - ((v - lo) / span) * PLOT_H;
 
   const line = days.map((d, i) => `${x(i)},${y(d.closing_balance_minor)}`).join(" ");
   const bufferY = y(bufferMinor);
@@ -95,7 +121,7 @@ export function BalanceCurve({
         <defs>
           {/* The breach region is the area below the buffer, clipped to the fill. */}
           <clipPath id={`${clipId}-below`}>
-            <rect x={PAD.left} y={bufferY} width={PLOT_W} height={Math.max(0, PAD.top + PLOT_H - bufferY)} />
+            <rect x={padLeft} y={bufferY} width={PLOT_W} height={Math.max(0, PAD_TOP + PLOT_H - bufferY)} />
           </clipPath>
         </defs>
 
@@ -105,7 +131,7 @@ export function BalanceCurve({
             buffer paints the whole strip red whenever the floor sits under the
             buffer, regardless of where the curve actually goes. */}
         <polygon
-          points={`${PAD.left},${bufferY} ${line} ${PAD.left + PLOT_W},${bufferY}`}
+          points={`${padLeft},${bufferY} ${line} ${padLeft + PLOT_W},${bufferY}`}
           fill="var(--status-critical)"
           opacity="0.18"
           clipPath={`url(#${clipId}-below)`}
@@ -113,8 +139,8 @@ export function BalanceCurve({
 
         {/* Buffer threshold -- recessive, dashed, labelled. */}
         <line
-          x1={PAD.left}
-          x2={PAD.left + PLOT_W}
+          x1={padLeft}
+          x2={padLeft + PLOT_W}
           y1={bufferY}
           y2={bufferY}
           stroke="var(--status-critical)"
@@ -124,7 +150,7 @@ export function BalanceCurve({
         {/* Labelled on the line itself, at the right, clear of the y-axis ticks --
             "buffer" and the axis minimum otherwise print on top of each other. */}
         <text
-          x={PAD.left + PLOT_W}
+          x={padLeft + PLOT_W}
           y={bufferY - 5}
           textAnchor="end"
           fontSize="10"
@@ -135,10 +161,10 @@ export function BalanceCurve({
 
         {/* Baseline */}
         <line
-          x1={PAD.left}
-          x2={PAD.left + PLOT_W}
-          y1={PAD.top + PLOT_H}
-          y2={PAD.top + PLOT_H}
+          x1={padLeft}
+          x2={padLeft + PLOT_W}
+          y1={PAD_TOP + PLOT_H}
+          y2={PAD_TOP + PLOT_H}
           stroke="var(--baseline)"
           strokeWidth="1"
         />
@@ -159,16 +185,16 @@ export function BalanceCurve({
         {/* The observed extremes, not the padded domain edges -- a tick that no
             data point reaches is a number the reader cannot locate. The low tick
             is dropped when it IS the buffer, which carries its own label. */}
-        {(rawLo === bufferMinor ? [rawHi] : [rawHi, rawLo]).map((v) => (
+        {yLabels.map((label) => (
           <text
-            key={v}
-            x={PAD.left - 8}
-            y={y(v) + 4}
+            key={label.value}
+            x={padLeft - 8}
+            y={y(label.value) + 4}
             textAnchor="end"
-            fontSize="10"
+            fontSize={AXIS_FONT}
             fill="var(--text-muted)"
           >
-            {formatMinor(v)}
+            {label.text}
           </text>
         ))}
 
@@ -209,8 +235,8 @@ export function BalanceCurve({
           <line
             x1={x(hover)}
             x2={x(hover)}
-            y1={PAD.top}
-            y2={PAD.top + PLOT_H}
+            y1={PAD_TOP}
+            y2={PAD_TOP + PLOT_H}
             stroke="var(--text-muted)"
             strokeWidth="1"
           />
@@ -221,7 +247,7 @@ export function BalanceCurve({
           <rect
             key={d.day}
             x={x(i) - PLOT_W / days.length / 2}
-            y={PAD.top}
+            y={PAD_TOP}
             width={PLOT_W / days.length}
             height={PLOT_H}
             fill="transparent"
