@@ -409,6 +409,50 @@ export const getRecovery = () => get<Recovery>("/dashboard/recovery");
 export const getNetWorth = () => get<NetWorth>("/dashboard/net-worth");
 export const getGoals = () => get<Goal[]>("/goals");
 export const getScenarios = () => get<Scenario[]>("/scenarios");
+
+export interface RestoreResult {
+  accounts: number;
+  categories: number;
+  transactions: number;
+  postings: number;
+}
+
+/**
+ * Fetch an export as a blob and save it.
+ *
+ * A plain link would also work — the session cookie is SameSite=lax, so a
+ * top-level GET carries it — but a failed download would then render the API's
+ * error page instead of reporting the failure here.
+ */
+export async function downloadExport(path: string, filename: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, { credentials: "include" });
+  if (!res.ok) throw new Error(`export failed (${res.status})`);
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function restoreBackup(
+  payload: unknown,
+  replace: boolean,
+): Promise<RestoreResult> {
+  const res = await fetch(`${BASE}/restore?replace=${replace}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(body?.detail ?? `restore failed (${res.status})`);
+  }
+  return body as RestoreResult;
+}
 export const getScenarioResult = (id: string) =>
   get<ScenarioResult>(`/scenarios/${id}/result`);
 export const compareScenarios = (ids: string[]) =>

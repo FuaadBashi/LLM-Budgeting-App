@@ -339,3 +339,208 @@ async def restore_backup(
         transactions=result.transactions,
         postings=result.postings,
     )
+
+
+# --------------------------------------------------------------------------
+# XLSX and PDF (plan section 10's remaining two formats)
+# --------------------------------------------------------------------------
+
+
+def _period(session: Session, start: date | None, end: date | None) -> tuple[date, date]:
+    today = clock_today(session)
+    return start or date(today.year, 1, 1), end or today
+
+
+@router.get("/export/transactions.xlsx")
+def export_xlsx(
+    start: date | None = None,
+    end: date | None = None,
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """Workbook with a posting sheet and a category summary sheet.
+
+    Amounts are written as numbers rather than strings, because a spreadsheet
+    column you cannot sum is not worth exporting. That costs exactness: a
+    workbook stores IEEE doubles, so `transactions.csv` -- where every amount is
+    a decimal string -- stays the canonical export, exactly as it is for
+    `summary.csv`.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    start, end = _period(session, start, end)
+    book = Workbook()
+
+    postings = book.active
+    postings.title = "Postings"
+    headers = ["Date", "Description", "Merchant", "Account", "Kind",
+               "Category", "Amount", "Currency"]
+    postings.append(headers)
+
+    for txn, posting, account, category in _rows(session, start, end):
+        postings.append([
+            txn.booking_date,
+            txn.description,
+            txn.merchant or "",
+            account.name,
+            account.kind.value,
+            category.name if category else "",
+            float(posting.amount),
+            posting.currency,
+        ])
+
+    summary = book.create_sheet("By category")
+    summary.append(["Category", "Amount"])
+    period = analytics.summarise(session, start, end)
+    for row in period.by_category:
+        summary.append([row.name, float(row.amount)])
+    summary.append([])
+    summary.append(["Income", float(period.income)])
+    summary.append(["Spending", float(period.expense)])
+    summary.append(["Set aside", float(period.saved)])
+    summary.append(["Net", float(period.net)])
+
+    for sheet, money_cols, widths in (
+        (postings, ("G",), (12, 34, 20, 20, 12, 22, 14, 10)),
+        (summary, ("B",), (28, 14)),
+    ):
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="left")
+        for index, width in enumerate(widths, start=1):
+            sheet.column_dimensions[get_column_letter(index)].width = width
+        for column in money_cols:
+            for cell in sheet[column][1:]:
+                cell.number_format = '#,##0.00'
+        sheet.freeze_panes = "A2"
+    for cell in postings["A"][1:]:
+        cell.number_format = "yyyy-mm-dd"
+
+    buffer = io.BytesIO()
+    book.save(buffer)
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="transactions-{start}-{end}.xlsx"'
+            )
+        },
+    )
+
+
+@router.get("/export/statement.pdf")
+def export_pdf(
+    start: date | None = None,
+    end: date | None = None,
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """A statement for reading, not for re-importing.
+
+    Every other export is a data interchange format; this one is the archival
+    copy -- the thing that still means something opened in ten years with no
+    application to load it into. So it states the period, the totals and the
+    category breakdown, and stops there rather than dumping every posting.
+    """
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    )
+
+    start, end = _period(session, start, end)
+    period = analytics.summarise(session, start, end)
+
+    styles = getSampleStyleSheet()
+    muted = ParagraphStyle("muted", parent=styles["Normal"],
+                           fontSize=9, textColor=colors.HexColor("#6b6a66"))
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=20 * mm, rightMargin=20 * mm,
+        topMargin=18 * mm, bottomMargin=18 * mm,
+        title=f"Statement {start} to {end}", author="Personal Finance OS",
+    )
+
+    def money(value: Decimal) -> str:
+        return f"{'-' if value < 0 else ''}£{abs(value):,.2f}"
+
+    story = [
+        Paragraph("Statement", styles["Title"]),
+        Paragraph(f"{start:%-d %B %Y} to {end:%-d %B %Y}", muted),
+        Spacer(1, 8 * mm),
+    ]
+
+    rate = (
+        f"{period.savings_rate:.1%}" if period.savings_rate is not None else "—"
+    )
+    set_aside = (
+        f"{period.set_aside_rate:.1%}" if period.set_aside_rate is not None else "—"
+    )
+    totals = Table(
+        [
+            ["Income", money(period.income)],
+            ["Spending", money(period.expense)],
+            ["Set aside", money(period.saved)],
+            ["Net", money(period.net)],
+            ["Savings rate", rate],
+            ["Set-aside rate", set_aside],
+        ],
+        colWidths=[70 * mm, 40 * mm],
+        hAlign="LEFT",
+    )
+    totals.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("FONTNAME", (0, 3), (-1, 3), "Helvetica-Bold"),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.HexColor("#dededa")),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story += [totals, Spacer(1, 10 * mm)]
+
+    if period.by_category:
+        story.append(Paragraph("Spending by category", styles["Heading3"]))
+        story.append(Spacer(1, 2 * mm))
+        rows = [["Category", "Amount", "Share"]]
+        total = sum((c.amount for c in period.by_category), Decimal("0"))
+        for c in period.by_category:
+            share = f"{c.amount / total:.1%}" if total else "—"
+            rows.append([c.name, money(c.amount), share])
+        table = Table(rows, colWidths=[95 * mm, 40 * mm, 25 * mm], hAlign="LEFT",
+                      repeatRows=1)
+        table.setStyle(TableStyle([
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.6, colors.HexColor("#9a9992")),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.3, colors.HexColor("#e8e8e4")),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(table)
+
+    story += [
+        Spacer(1, 12 * mm),
+        Paragraph(
+            "Figures are derived from postings at the time of export. "
+            "Voided transactions are excluded. For a machine-readable copy use "
+            "transactions.csv, where amounts are exact decimal strings.",
+            muted,
+        ),
+    ]
+
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="statement-{start}-{end}.pdf"'
+        },
+    )

@@ -188,8 +188,13 @@ would have to invent one — and an invented figure is the one that stops reconc
 **Money crosses both export formats as decimal strings.** JSON has no decimal type; emitting
 numbers would round-trip through a float and change the figures a backup exists to preserve.
 
-**XLSX and PDF are deferred.** Plan §10 lists four formats; CSV and JSON carry the data and the
-other two are presentation.
+**XLSX and PDF are now built** (all four §10 formats ship). They serve different jobs, and the
+split is deliberate: the workbook writes amounts as *numbers* so a spreadsheet can sum them,
+which costs exactness because a workbook stores IEEE doubles; the PDF is a statement for reading
+and archiving, not for re-importing, so it carries totals and a category breakdown rather than
+every posting. `transactions.csv`, where every amount is an exact decimal string, remains the
+canonical export, and both new formats are tested against it rather than against the ledger
+directly — a second export format is a second chance to invent a number.
 
 ## Corrections (Phase 1 revisited). Decided 31 August 2026
 
@@ -198,3 +203,23 @@ that genuinely happened. Voiding a transaction that has already been reversed is
 API rather than left to the L3 trigger, so the caller gets a 422 rather than a 500.
 
 **Voided rows are hidden by default but never deleted.** An audit trail you cannot see is not one.
+
+## Deletion and retention. Decided 31 August 2026
+
+**Nothing in the ledger can be deleted, and neither can anything history refers to.** Accounts,
+categories, budgets, goals and commitments are archived with an `active` flag instead. The
+reason is not squeamishness about data loss: these records are what a closed period *meant*.
+Delete the category a budget was scoped to and last March stops being reconstructible; the
+number does not just disappear, it silently changes. Archiving removes something from the
+future without rewriting the past. This is the same reason void-plus-reversal is the correction
+path rather than an edit — see *Corrections* above.
+
+**Scenarios are the single exception.** They are hypotheticals: nothing was ever true of them,
+no closed period cites them, and there is no audit trail to preserve. So `DELETE /scenarios/{id}`
+exists and the simulator offers it. The asymmetry is the rule stated positively — deletion is
+allowed exactly where there is no history to damage.
+
+**Consequence worth accepting:** the database only grows. For a single-user app with a
+years-long horizon that is measured in megabytes, and the alternative — a purge that has to
+reason about what history still needs — is the kind of feature that eventually deletes the wrong
+thing.

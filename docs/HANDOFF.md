@@ -21,10 +21,10 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 9 | Intelligence — explanations, recommendations | ✗ |
 | 10 | Polish, backups, hosting | ✗ |
 
-**Phases 0–5 and 8 complete.** 361 tests.
+**Phases 0–5 and 8 complete.** 370 tests.
 
-Frontend has seven screens — dashboard, transactions, analytics, budgets, calendar, goals and
-simulator — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
+Frontend has eight screens — dashboard, transactions, analytics, budgets, calendar, goals,
+simulator and data — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
 The Add button records expenses, income, transfers/debt payments and refunds as balanced two-leg
 transactions. The transactions screen
 lists history, shows each row's effect on liquid cash, and offers Void as the correction path;
@@ -107,7 +107,8 @@ set a password (`scripts/set_password.py` writes the hash to `.env`) and termina
 of it, then set `COOKIE_SECURE=true`. The app logs a loud warning at startup while unprotected.
 
 Backup and restore are done, with a round-trip test asserting balances and net worth survive a
-wipe. There is no *scheduled* backup — running the export is still a manual act.
+wipe, and reachable from `/data` rather than only by hand. There is no *scheduled* backup —
+running the export is still a manual act.
 
 ### Security debt
 
@@ -133,9 +134,12 @@ each with named tests.
    is stated in `scenario_routes.delete_scenario`.
 2. `rollover_reset` works but no UI reaches it, and a budget's period/anchor cannot be changed
    after creation (deliberately — that reshapes every historical boundary).
-3. XLSX and PDF export (plan §10 lists four formats; CSV — both posting-level and summary — and
-   JSON are built).
-4. No restore *UI* — restoring means POSTing a file to the API by hand.
+3. ~~XLSX and PDF export~~ — done. All four §10 formats ship. The workbook writes amounts as
+   numbers so a spreadsheet can sum them; the PDF is a statement for reading, not re-importing.
+   `transactions.csv` stays canonical and both new formats are tested against it.
+4. ~~No restore UI~~ — done. `/data` handles all four exports, the JSON backup, and restore with
+   a client-side parse, a preview of what the file contains, and a typed confirmation when the
+   database is not empty.
 5. Transaction editing. Void plus re-enter is the only correction path; there is no edit for
    non-monetary fields, which §2 of the rulebook permits.
 
