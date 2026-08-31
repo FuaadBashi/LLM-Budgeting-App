@@ -110,5 +110,18 @@ docs/
 
 ## Security
 
-Single-user and **unauthenticated**. Fine on localhost; nothing here should be exposed to a
-network as it stands. See §14 of the plan and the open items in `docs/HANDOFF.md`.
+Single-user. Authentication is **off by default** — the app is local-first, and a login on
+`localhost` is friction with no threat model behind it. The API logs a warning at startup while
+unprotected.
+
+To turn it on:
+
+```bash
+cd backend && ./.venv/bin/python scripts/set_password.py
+```
+
+It prompts for a password, prints only the PBKDF2 hash, and never writes the password anywhere.
+Put the printed line in `backend/.env` (gitignored) and restart the API. Changing the password
+ends every existing session.
+
+Behind a reverse proxy terminating HTTPS, also set `COOKIE_SECURE=true`.

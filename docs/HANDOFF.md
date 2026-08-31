@@ -21,7 +21,7 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 9 | Intelligence — explanations, recommendations | ✗ |
 | 10 | Polish, backups, hosting | ✗ |
 
-**Phases 0–5 complete.** 292 tests.
+**Phases 0–5 complete.** 313 tests.
 
 Frontend has three screens: the dashboard, `/transactions` and `/analytics`. Budgets, Calendar
 and Goals are still `soon` and their nav items are disabled. The Add button records expenses, income,
@@ -54,6 +54,7 @@ live; routes only translate to and from integer minor units.
 | `domain/impact.py` | W3 -- what one transaction did to a budget |
 | `domain/analytics.py` | Period and monthly summaries |
 | `domain/restore.py` | Rebuilding the ledger from a JSON backup |
+| `auth.py` | Password hashing, session cookies, the route guard |
 | `domain/disposable.py` | Safe to spend, net worth, account balances |
 | `domain/classification.py` | Derived transaction type |
 
@@ -96,12 +97,14 @@ use. The correctness debt below is now empty.
 
 ### Blocking real use
 
-1. **No authentication.** §14 of the plan asks for at least local access control and HTTPS before
-   anything leaves the machine. This is now the only item in this section.
+Nothing outstanding for local use.
 
-Backup and restore are done: `/export/backup.json` and `POST /restore`, with a round-trip test
-asserting balances and net worth are identical after a wipe. There is no *scheduled* backup —
-running the export is still a manual act.
+**Before exposing it to a network**, two things are still on you rather than on the code:
+set a password (`scripts/set_password.py` writes the hash to `.env`) and terminate HTTPS in front
+of it, then set `COOKIE_SECURE=true`. The app logs a loud warning at startup while unprotected.
+
+Backup and restore are done, with a round-trip test asserting balances and net worth survive a
+wipe. There is no *scheduled* backup — running the export is still a manual act.
 
 ### Correctness debt
 
@@ -113,7 +116,8 @@ each with named tests.
 3. Budget, goal and obligation management screens. The API supports the reads and writes; only
    the dashboard and transactions list have a UI.
 4. `Budget.end_date` and `rollover_reset` work but no UI reaches them.
-5. XLSX and PDF export (plan §10 lists four formats; CSV and JSON are built).
+5. XLSX and PDF export (plan §10 lists four formats; CSV — both posting-level and summary — and
+   JSON are built).
 6. No restore *UI* — restoring means POSTing a file to the API by hand.
 7. Transaction editing. Void plus re-enter is the only correction path; there is no edit for
    non-monetary fields, which §2 of the rulebook permits.
@@ -157,6 +161,11 @@ These are bugs already found and fixed. They will come back if the reasoning is 
   value and the two states must stay distinguishable.
 - **Elapsed + remaining = total + 1.** Today counts in both. Deriving one from the other is off
   by one every day and divides by zero on the last day of every period.
+- **Cross-origin fetches need `credentials: "include"`.** The API is a different origin, so
+  without it the session cookie is never sent and every request looks anonymous.
+- **Two savings figures, not one.** `savings_rate` is `(income − spending) / income`, the standard
+  definition. `set_aside_rate` is what was deliberately moved. Reporting only the second told a
+  careful saver with no savings account that they saved nothing.
 - **TRUNCATE is invisible to the SQLAlchemy identity map.** `expunge_all()` after it, or the
   session still holds rows that no longer exist and re-inserting their ids collides.
 - **Compare money as `Decimal`, not as strings.** A value round-tripped through `NUMERIC(19,4)`
