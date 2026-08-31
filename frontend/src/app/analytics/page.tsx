@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/AppShell";
+import { requireSession } from "@/lib/guard";
 import { CategoryBars } from "@/components/CategoryBars";
 import { MonthlyBars } from "@/components/MonthlyBars";
 import { StatTile } from "@/components/StatTile";
@@ -20,6 +21,9 @@ function monthName(iso: string): string {
 }
 
 export default async function AnalyticsPage() {
+  const gate = await requireSession();
+  if (gate) return gate;
+
   let period: PeriodSummary | null = null;
   let months: PeriodSummary[] = [];
   let error: string | null = null;

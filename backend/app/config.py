@@ -10,5 +10,11 @@ class Settings(BaseSettings):
     test_database_url: str = "postgresql+psycopg://localhost/budgetapp_test"
     echo_sql: bool = False
 
+    #: Empty means authentication is off. Set it with scripts/set_password.py.
+    #: The password itself is never stored -- only this hash.
+    auth_password_hash: str = ""
+    #: Send the session cookie only over HTTPS. Leave false for localhost.
+    cookie_secure: bool = False
+
 
 settings = Settings()

@@ -46,11 +46,6 @@ from app.models.enums import LIQUID_KINDS
 router = APIRouter()
 
 
-@router.get("/health")
-def health() -> dict:
-    return {"status": "ok"}
-
-
 # --------------------------------------------------------------------------
 # Accounts
 # --------------------------------------------------------------------------

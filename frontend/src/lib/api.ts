@@ -185,16 +185,55 @@ export interface FinancialCalendar {
   days: CalendarDay[];
 }
 
+/** Thrown when the API says a session is required, so callers can redirect. */
+export class UnauthenticatedError extends Error {
+  constructor() {
+    super("authentication required");
+    this.name = "UnauthenticatedError";
+  }
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
+  // credentials: "include" is not optional here -- the API is a different
+  // origin, so without it the session cookie is simply never sent and every
+  // request looks anonymous.
+  const res = await fetch(`${BASE}${path}`, {
+    cache: "no-store",
+    credentials: "include",
+  });
+  if (res.status === 401) throw new UnauthenticatedError();
   if (!res.ok) throw new Error(`${path} responded ${res.status}`);
   return res.json() as Promise<T>;
+}
+
+export interface SessionState {
+  auth_enabled: boolean;
+  authenticated: boolean;
+}
+
+export const getSession = () => get<SessionState>("/auth/session");
+
+export async function login(password: string): Promise<SessionState> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ password }),
+  });
+  if (res.status === 401) throw new Error("Incorrect password.");
+  if (!res.ok) throw new Error(`Login failed (${res.status}).`);
+  return res.json() as Promise<SessionState>;
+}
+
+export async function logout(): Promise<void> {
+  await fetch(`${BASE}/auth/logout`, { method: "POST", credentials: "include" });
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(body),
   });
 
@@ -237,7 +276,10 @@ export const getTransactions = (limit = 100, includeVoided = false) =>
   );
 
 export async function voidTransaction(id: string): Promise<Transaction> {
-  const res = await fetch(`${BASE}/transactions/${id}/void`, { method: "POST" });
+  const res = await fetch(`${BASE}/transactions/${id}/void`, {
+    method: "POST",
+    credentials: "include",
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail ?? `void failed (${res.status})`);

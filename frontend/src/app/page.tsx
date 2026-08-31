@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/AppShell";
+import { requireSession } from "@/lib/guard";
 import { BalanceCurve } from "@/components/BalanceCurve";
 import { BudgetCard } from "@/components/BudgetCard";
 import { StatTile } from "@/components/StatTile";
@@ -34,6 +35,9 @@ function shortDate(iso: string): string {
 }
 
 export default async function Dashboard() {
+  const gate = await requireSession();
+  if (gate) return gate;
+
   let sts: SafeToSpend | null = null;
   let accounts: Account[] = [];
   let budgets: BudgetPeriod[] = [];

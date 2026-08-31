@@ -3,7 +3,12 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Secrets. .env holds AUTH_PASSWORD_HASH; the wildcard catches the tmp/bak
+# variants that editors and shell redirects leave behind.
 .env
+.env.*
+!.env.example
 
 # Node
 node_modules/

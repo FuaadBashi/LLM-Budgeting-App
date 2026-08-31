@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { requireSession } from "@/lib/guard";
 import { TransactionList } from "@/components/TransactionList";
 import { getTransactions, type Transaction } from "@/lib/api";
 
@@ -10,6 +11,9 @@ export default async function TransactionsPage({
 }: {
   searchParams: Promise<{ voided?: string }>;
 }) {
+  const gate = await requireSession();
+  if (gate) return gate;
+
   const params = await searchParams;
   const showVoided = params.voided === "1";
 
