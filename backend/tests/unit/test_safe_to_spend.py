@@ -223,6 +223,49 @@ def test_total_accessible_includes_flexible_savings_but_not_protected(
     assert r.total_accessible == r.safe_to_spend + Decimal("800")
 
 
+def test_X10_total_accessible_releases_unmade_flexible_contributions(
+    session, accounts, profile, payday
+):
+    flexible = add_goal(
+        session,
+        "Holiday",
+        "300",
+        priority=GoalPriority.OPTIONAL,
+        account_id=accounts["savings"].id,
+    )
+    protected = add_goal(
+        session,
+        "Emergency Fund",
+        "500",
+        priority=GoalPriority.CRITICAL,
+        account_id=accounts["savings"].id,
+    )
+    session.add_all(
+        [
+            GoalContribution(
+                goal_id=flexible.id,
+                amount=Decimal("800"),
+                booking_date=date(2026, 7, 15),
+            ),
+            GoalContribution(
+                goal_id=protected.id,
+                amount=Decimal("1000"),
+                booking_date=date(2026, 7, 15),
+            ),
+        ]
+    )
+    session.commit()
+
+    result = compute_safe_to_spend(session, TODAY)
+
+    assert result.remaining_planned == Decimal("800")
+    assert result.unprotected_savings == Decimal("800")
+    assert result.flexible_planned_release == Decimal("300")
+    assert result.total_accessible == (
+        result.safe_to_spend + Decimal("800") + Decimal("300")
+    )
+
+
 def test_protected_flag_overrides_priority(session, accounts, profile, payday):
     goal = add_goal(
         session, "Holiday", "0", priority=GoalPriority.OPTIONAL

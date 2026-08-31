@@ -13,7 +13,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.enums import AccountKind, TransactionClass
+from app.models.enums import AccountKind, CategoryNature, TransactionClass
 
 MINOR_UNITS = Decimal("100")
 
@@ -41,6 +41,15 @@ class AccountIn(BaseModel):
     kind: AccountKind
     currency: str = "GBP"
     opening_balance_minor: int = 0
+
+
+class CategoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    parent_id: uuid.UUID | None
+    nature: CategoryNature
 
 
 class PostingIn(BaseModel):
@@ -96,6 +105,7 @@ class SafeToSpendOut(BaseModel):
     protected_buffer_minor: int
     remaining_planned_minor: int
     unprotected_savings_minor: int
+    flexible_planned_release_minor: int
     window_end: date
     breakdown: list[tuple[str, int]]
 

@@ -1,0 +1,39 @@
+{
+  "as_of": "2026-08-31",
+  "profile": {"protected_cash_buffer": "200"},
+  "accounts": {
+    "Current": {"kind": "current", "opening": "1000"},
+    "Cash": {"kind": "cash", "opening": "50"},
+    "Savings": {"kind": "savings", "opening": "4500"},
+    "Investment": {"kind": "investment", "opening": "2000"},
+    "Loan": {"kind": "liability", "opening": "-3000"},
+    "Salary": {"kind": "income_source", "opening": "0"},
+    "Groceries": {"kind": "expense", "opening": "0"},
+    "Rent": {"kind": "expense", "opening": "0"}
+  },
+  "categories": {
+    "Food": "discretionary",
+    "Housing": "essential"
+  },
+  "transactions": [
+    {"date": "2026-08-01", "description": "Salary", "legs": [["Current", "2500", null], ["Salary", "-2500", null]]},
+    {"date": "2026-08-02", "description": "Rent", "legs": [["Current", "-600", null], ["Rent", "600", "Housing"]]},
+    {"date": "2026-08-15", "description": "Groceries", "legs": [["Current", "-300", null], ["Groceries", "300", "Food"]]},
+    {"date": "2026-08-20", "description": "Emergency fund", "legs": [["Current", "-500", null], ["Savings", "500", null]]}
+  ],
+  "goals": [
+    {"name": "Emergency Fund", "account": "Savings", "priority": "high", "planned": "500", "contributions": [{"date": "2026-08-20", "amount": "500"}]},
+    {"name": "Holiday", "account": "Savings", "priority": "optional", "planned": "200", "contributions": [{"date": "2026-07-15", "amount": "800"}]}
+  ],
+  "budget": {"name": "Discretionary", "amount": "700", "start": "2026-08-01"},
+  "expected_income": {"name": "Salary", "amount": "2500", "date": "2026-09-01"},
+  "obligation": {"name": "Rent", "amount": "600", "date": "2026-09-05"},
+  "expected": {
+    "balances": {"Current": "2100", "Cash": "50", "Savings": "5000", "Investment": "2000", "Loan": "-3000"},
+    "net_worth": "6150",
+    "safe_to_spend": {"cash": "2150", "committed": "600", "buffer": "200", "remaining_planned": "200", "safe": "1150", "unprotected_savings": "800", "flexible_release": "200", "total_accessible": "2150"},
+    "budget": {"spent": "300", "remaining": "400", "presented_allowance": "400"},
+    "recovery": {"headroom": "1750", "gap": "0", "planned_total": "700", "already_contributed": "500", "projected_total": "700"},
+    "calendar": {"opening": "2150", "2026-09-01": "4650", "2026-09-05": "4050", "trough": "2150"}
+  }
+}

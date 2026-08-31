@@ -18,8 +18,9 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.domain.clock import today as clock_today
+from app.domain.ledger_scope import posted_transaction_ids
 from app.models.enums import ASSET_KINDS, LIQUID_KINDS, AccountKind
-from app.models.ledger import Account, Posting, Transaction, TransactionStatus
+from app.models.ledger import Account, Posting, Transaction
 from app.models.planning import (
     ExpectedIncome,
     FutureObligation,
@@ -42,6 +43,7 @@ class SafeToSpend:
     remaining_planned: Decimal
     safe_to_spend: Decimal
     unprotected_savings: Decimal
+    flexible_planned_release: Decimal
     total_accessible: Decimal
     window_end: date
 
@@ -59,10 +61,8 @@ def account_balances(session: Session, as_of: date | None = None) -> dict:
     q = (
         select(Posting.account_id, func.coalesce(func.sum(Posting.amount), ZERO))
         .join(Transaction, Posting.transaction_id == Transaction.id)
-        .where(Transaction.status == TransactionStatus.POSTED)
+        .where(Posting.transaction_id.in_(posted_transaction_ids(end=as_of)))
     )
-    if as_of is not None:
-        q = q.where(Transaction.booking_date <= as_of)
     movements = dict(session.execute(q.group_by(Posting.account_id)).all())
 
     balances = {}
@@ -215,7 +215,8 @@ def compute_safe_to_spend(session: Session, today: date | None = None) -> SafeTo
     profile = session.scalars(select(UserProfile)).first()
     buffer_ = profile.protected_cash_buffer if profile else ZERO
 
-    planned = remaining_planned_contributions(session, today)
+    split = planned_contributions_split(session, today)
+    planned = split.total
 
     # Invariant S2: this may legitimately be negative. A negative value is a real
     # state -- "you are past the point where the plan survives" -- not an error.
@@ -233,6 +234,7 @@ def compute_safe_to_spend(session: Session, today: date | None = None) -> SafeTo
         remaining_planned=planned,
         safe_to_spend=sts,
         unprotected_savings=unprotected,
-        total_accessible=sts + unprotected,
+        flexible_planned_release=split.flexible,
+        total_accessible=sts + unprotected + split.flexible,
         window_end=window_end,
     )

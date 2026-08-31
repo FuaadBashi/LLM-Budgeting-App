@@ -36,6 +36,16 @@ def test_create_and_list_account(client):
     assert [a["name"] for a in listed] == ["Current"]
 
 
+def test_list_categories_for_transaction_entry(client, categories):
+    listed = client.get("/api/categories")
+
+    assert listed.status_code == 200
+    assert {row["name"] for row in listed.json()} == {
+        category.name for category in categories.values()
+    }
+    assert all("nature" in row for row in listed.json())
+
+
 def test_transaction_classification_is_returned_not_submitted(client, accounts):
     """The client never sends a transaction type; the server derives it."""
     r = client.post(
@@ -85,6 +95,7 @@ def test_single_leg_transaction_is_rejected(client, accounts):
 def test_safe_to_spend_breakdown_sums_to_the_headline(client, accounts):
     body = client.get("/api/dashboard/safe-to-spend?as_of=2026-08-15").json()
     assert sum(v for _, v in body["breakdown"]) == body["safe_to_spend_minor"]
+    assert "flexible_planned_release_minor" in body
 
 
 def test_no_endpoint_can_write_a_derived_total(client):

@@ -22,36 +22,15 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import text
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.domain.categories import scope_ids
-from app.models.enums import CategoryNature
+from app.domain.ledger_scope import posted_transaction_ids
+from app.models.enums import AccountKind, CategoryNature
+from app.models.ledger import Account, Category, Posting, Transaction
 
 ZERO = Decimal("0")
-
-# One grouped query per budget. Bucketing into periods happens in Python, so SQL
-# never performs the date arithmetic that differs between the two languages.
-_SPEND_SQL = text(
-    """
-    SELECT t.booking_date, SUM(p.amount) AS total
-      FROM postings p
-      JOIN transactions t ON p.transaction_id = t.id
-      JOIN accounts     a ON p.account_id     = a.id
-      LEFT JOIN categories c ON p.category_id = c.id
-     WHERE t.status = 'POSTED'
-       AND a.kind   = 'EXPENSE'
-       AND t.booking_date BETWEEN :start AND :end
-       AND (
-             (:scoped = FALSE AND (p.category_id IS NULL OR c.nature = :discretionary))
-             OR
-             (:scoped = TRUE  AND p.category_id = ANY(:ids))
-           )
-     GROUP BY t.booking_date
-     ORDER BY t.booking_date
-    """
-)
-
 
 def spend_by_booking_date(
     session: Session,
@@ -65,15 +44,30 @@ def spend_by_booking_date(
     multi-year daily budget.
     """
     ids = scope_ids(session, category_id)
+    query = (
+        select(Transaction.booking_date, func.sum(Posting.amount).label("total"))
+        .join(Transaction, Posting.transaction_id == Transaction.id)
+        .join(Account, Posting.account_id == Account.id)
+        .outerjoin(Category, Posting.category_id == Category.id)
+        .where(
+            Posting.transaction_id.in_(
+                posted_transaction_ids(start=start, end=end)
+            )
+        )
+        .where(Account.kind == AccountKind.EXPENSE)
+    )
+    if ids is None:
+        query = query.where(
+            or_(
+                Posting.category_id.is_(None),
+                Category.nature == CategoryNature.DISCRETIONARY,
+            )
+        )
+    else:
+        query = query.where(Posting.category_id.in_(ids))
+
     rows = session.execute(
-        _SPEND_SQL,
-        {
-            "start": start,
-            "end": end,
-            "scoped": ids is not None,
-            "ids": list(ids) if ids else [],
-            "discretionary": CategoryNature.DISCRETIONARY.name,
-        },
+        query.group_by(Transaction.booking_date).order_by(Transaction.booking_date)
     ).all()
     return [(r.booking_date, r.total or ZERO) for r in rows]
 
@@ -94,19 +88,16 @@ def uncategorised_between(
     imported statement is entirely untagged should be able to see why their
     discretionary budget moved.
     """
-    row = session.execute(
-        text(
-            """
-            SELECT COALESCE(SUM(p.amount), 0) AS total
-              FROM postings p
-              JOIN transactions t ON p.transaction_id = t.id
-              JOIN accounts     a ON p.account_id     = a.id
-             WHERE t.status = 'POSTED'
-               AND a.kind   = 'EXPENSE'
-               AND p.category_id IS NULL
-               AND t.booking_date BETWEEN :start AND :end
-            """
-        ),
-        {"start": start, "end": end},
-    ).one()
-    return row.total or ZERO
+    total = session.scalar(
+        select(func.coalesce(func.sum(Posting.amount), ZERO))
+        .join(Transaction, Posting.transaction_id == Transaction.id)
+        .join(Account, Posting.account_id == Account.id)
+        .where(
+            Posting.transaction_id.in_(
+                posted_transaction_ids(start=start, end=end)
+            )
+        )
+        .where(Account.kind == AccountKind.EXPENSE)
+        .where(Posting.category_id.is_(None))
+    )
+    return total or ZERO

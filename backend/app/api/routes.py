@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.api.schemas import (
     AccountIn,
     AccountOut,
+    CategoryOut,
     NetWorthOut,
     PostingOut,
     SafeToSpendOut,
@@ -30,7 +31,7 @@ from app.db import get_session
 from app.domain.classification import classify
 from app.domain.clock import today as clock_today
 from app.domain.disposable import account_balances, compute_safe_to_spend, net_worth
-from app.models import Account, Posting, Transaction
+from app.models import Account, Category, Posting, Transaction
 
 router = APIRouter()
 
@@ -79,6 +80,17 @@ def create_account(
         currency=account.currency,
         balance_minor=payload.opening_balance_minor,
     )
+
+
+# --------------------------------------------------------------------------
+# Categories
+# --------------------------------------------------------------------------
+
+
+@router.get("/categories", response_model=list[CategoryOut])
+def list_categories(session: Session = Depends(get_session)) -> list[Category]:
+    """Expose category ids for transaction entry without exposing derived totals."""
+    return list(session.scalars(select(Category).order_by(Category.name)))
 
 
 # --------------------------------------------------------------------------
@@ -167,6 +179,7 @@ def safe_to_spend(
         protected_buffer_minor=to_minor(r.protected_buffer),
         remaining_planned_minor=to_minor(r.remaining_planned),
         unprotected_savings_minor=to_minor(r.unprotected_savings),
+        flexible_planned_release_minor=to_minor(r.flexible_planned_release),
         window_end=r.window_end,
         breakdown=[(label, to_minor(v)) for label, v in r.explain()],
     )
