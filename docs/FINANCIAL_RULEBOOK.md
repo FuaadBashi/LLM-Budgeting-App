@@ -158,6 +158,11 @@ with a **minimum floor of 7 days**.
 
 If no expected income is configured, the window is 30 days.
 
+`ExpectedIncome.first_expected_date` is a recurrence **anchor**, never a pointer to the next
+payday, and nothing advances it. Every consumer derives occurrences by expanding the rule, so
+the answer stays correct once the anchor is in the past. **Invariant X11:** the near-term window,
+the recovery horizon and the projected balance curve resolve the same next-income date.
+
 Rationale: the question the number answers is "can I afford this before more money arrives?",
 so the window should track the pay cycle rather than a fixed span.
 

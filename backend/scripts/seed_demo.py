@@ -149,7 +149,7 @@ def main() -> None:
             # Salary recurs too -- without a rule the projected curve shows rent
             # every month against a single payday and slides downhill forever.
             ExpectedIncome(name="Salary", amount=Decimal("2500"),
-                           next_expected_date=date(2026, 9, 1),
+                           first_expected_date=date(2026, 9, 1),
                            rrule=build_rule(Frequency.MONTHLY, date(2026, 9, 1))),
         ])
 

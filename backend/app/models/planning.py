@@ -265,7 +265,9 @@ class ExpectedIncome(TimestampedUUID, Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Money, nullable=False)
     rrule: Mapped[str | None] = mapped_column(Text, nullable=True)
-    next_expected_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    #: Recurrence ANCHOR, not a pointer to the next payday. Never advanced --
+    #: occurrences are derived from the rule (see app/domain/income.py).
+    first_expected_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     account_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("accounts.id"), nullable=True
     )

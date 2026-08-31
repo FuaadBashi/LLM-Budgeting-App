@@ -34,7 +34,7 @@ def profile(session):
 def payday(session):
     """Salary on the 28th, so the near-term window is 13 days from TODAY."""
     inc = ExpectedIncome(
-        name="Salary", amount=Decimal("2500"), next_expected_date=date(2026, 8, 28)
+        name="Salary", amount=Decimal("2500"), first_expected_date=date(2026, 8, 28)
     )
     session.add(inc)
     session.commit()
@@ -357,7 +357,7 @@ def test_window_respects_the_seven_day_floor(session, profile):
     """Payday tomorrow must not collapse the window to a single day."""
     session.add(
         ExpectedIncome(
-            name="Salary", amount=Decimal("2500"), next_expected_date=TODAY + timedelta(days=1)
+            name="Salary", amount=Decimal("2500"), first_expected_date=TODAY + timedelta(days=1)
         )
     )
     session.commit()

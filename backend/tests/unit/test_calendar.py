@@ -43,7 +43,7 @@ def add_income(session, name, amount, when, frequency=None):
         ExpectedIncome(
             name=name,
             amount=Decimal(amount),
-            next_expected_date=when,
+            first_expected_date=when,
             rrule=build_rule(frequency, when) if frequency else None,
         )
     )

@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.disposable import account_balances
 from app.domain.money import ZERO
-from app.domain.recurrence import expand
+from app.domain.income import occurrences as income_occurrences
 from app.models.enums import LIQUID_KINDS
 from app.models.ledger import Account, Transaction
 from app.models.planning import (
@@ -87,18 +87,11 @@ def _expected_income_dates(
     money is already in the ledger, and counting it forward as well would show a
     salary arriving twice.
     """
-    out: list[tuple[date, str, Decimal]] = []
-    for income in session.scalars(
-        select(ExpectedIncome).where(ExpectedIncome.active.is_(True))
-    ):
-        if income.rrule:
-            dates = expand(income.rrule, income.next_expected_date, end)
-        else:
-            dates = [income.next_expected_date]
-        for d in dates:
-            if start < d <= end:
-                out.append((d, income.name, income.amount))
-    return out
+    return [
+        (when, name, amount)
+        for when, name, amount in income_occurrences(session, start, end)
+        if when > start
+    ]
 
 
 def _committed_outflows(

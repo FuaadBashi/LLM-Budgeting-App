@@ -21,7 +21,7 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 9 | Intelligence — explanations, recommendations | ✗ |
 | 10 | Polish, backups, hosting | ✗ |
 
-**Phases 0–4 are the MVP boundary the plan draws.** 224 tests.
+**Phases 0–4 are the MVP boundary the plan draws.** 235 tests.
 
 Frontend is one screen (dashboard). The nav lists Transactions, Budgets, Calendar and Goals as
 `soon` — those routes do not exist. The Add button opens manual entry for expenses, income,
@@ -80,8 +80,10 @@ calendar. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points. Honest sta
 | X9 | `date.today()` banned in `app/` | ✅ AST source-policy guard |
 | X10 | `TotalAccessible` releases flexible balance and unmade contribution | ✅ Named regression plus golden month |
 
-**Recommended next task.** Advance `ExpectedIncome.next_expected_date` when income is fulfilled.
-After that, implement reimbursement netting and connect W3 to transaction posting.
+| X11 | Expected income: all engines derive occurrences from the rule | ✅ `test_income_occurrences.py` |
+
+**Recommended next task.** Implement reimbursement netting, then connect W3 to transaction
+posting. Both are listed under correctness debt below.
 
 ---
 
@@ -96,22 +98,19 @@ After that, implement reimbursement netting and connect W3 to transaction postin
 
 ### Correctness debt
 
-3. **`ExpectedIncome.next_expected_date` never advances.** Recurrence expands it for projections,
-   but the stored column is not rolled forward when a salary posts, so it eventually sits in the
-   past. Harmless for the curve, wrong for the near-term window over time.
-4. **Reimbursement netting is specified but not implemented.** `BUDGET_ENGINE_SPEC.md` M3 defines
+3. **Reimbursement netting is specified but not implemented.** `BUDGET_ENGINE_SPEC.md` M3 defines
    pro-rata allocation with largest-remainder rounding; `Spent` currently ignores `reimburses_id`,
    so a reimbursed work expense still consumes a budget.
-5. **W3 (`material_single_expense`) is implemented but never called.** It needs a before/after
+4. **W3 (`material_single_expense`) is implemented but never called.** It needs a before/after
    allowance pair, which only a transaction-posting flow can supply.
 
 ### Product gaps
 
-6. Phase 5 analytics and export — its exit gate is "report numbers reconcile to ledger", which is
+5. Phase 5 analytics and export — its exit gate is "report numbers reconcile to ledger", which is
    why the cross-engine work should come first.
-7. Transaction history/correction plus budget/goal/obligation management screens; the API supports
+6. Transaction history/correction plus budget/goal/obligation management screens; the API supports
    most of the underlying reads and writes, but the UI does not.
-8. `Budget.end_date` and `rollover_reset` work but no UI reaches them.
+7. `Budget.end_date` and `rollover_reset` work but no UI reaches them.
 
 ### Goal integrity coverage
 
@@ -152,6 +151,9 @@ These are bugs already found and fixed. They will come back if the reasoning is 
   value and the two states must stay distinguishable.
 - **Elapsed + remaining = total + 1.** Today counts in both. Deriving one from the other is off
   by one every day and divides by zero on the last day of every period.
+- **A stored "next X date" is a derived value and will drift.** `ExpectedIncome` once had
+  `next_expected_date`; nothing advanced it, and two of its three readers took the name
+  literally. Occurrences come from the rule. The column is `first_expected_date`, an anchor.
 - **A budget edit must append a `BudgetRevision`, never mutate one.** Mutating rewrites history:
   a £300→£400 change moved an eight-month chain's answer from £390 to £1,090.
 

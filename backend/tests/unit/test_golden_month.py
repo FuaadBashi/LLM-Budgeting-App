@@ -122,7 +122,7 @@ def test_august_2026_reconciles_every_engine(session):
         ExpectedIncome(
             name=income_data["name"],
             amount=D(income_data["amount"]),
-            next_expected_date=dt(income_data["date"]),
+            first_expected_date=dt(income_data["date"]),
         )
     )
     obligation_data = data["obligation"]

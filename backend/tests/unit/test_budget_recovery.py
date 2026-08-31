@@ -44,7 +44,7 @@ def add_goal(session, name, planned, priority, **kw) -> SavingsGoal:
 
 def add_income(session, amount, when):
     session.add(
-        ExpectedIncome(name="Salary", amount=Decimal(amount), next_expected_date=when)
+        ExpectedIncome(name="Salary", amount=Decimal(amount), first_expected_date=when)
     )
     session.commit()
 

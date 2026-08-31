@@ -32,6 +32,7 @@ from app.domain.disposable import (
     near_term_committed,
     planned_contributions_split,
 )
+from app.domain.income import total_between as income_total_between
 from app.domain.money import ZERO
 from app.models.enums import LIQUID_KINDS, GoalPriority
 from app.models.ledger import Account
@@ -106,13 +107,7 @@ def expected_income_before(session: Session, today: date, horizon: date) -> Deci
     term as well overstates headroom by a full month's pay on the one day the
     user is most likely to be looking.
     """
-    total = ZERO
-    for income in session.scalars(
-        select(ExpectedIncome).where(ExpectedIncome.active.is_(True))
-    ):
-        if today < income.next_expected_date <= horizon:
-            total += income.amount
-    return total
+    return income_total_between(session, today, horizon)
 
 
 def assess(session: Session, today: date) -> Recovery:

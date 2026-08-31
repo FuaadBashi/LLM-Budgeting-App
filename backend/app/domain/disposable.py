@@ -18,6 +18,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.domain.clock import today as clock_today
+from app.domain.income import next_date as income_next_date
 from app.domain.ledger_scope import posted_transaction_ids
 from app.models.enums import ASSET_KINDS, LIQUID_KINDS, AccountKind
 from app.models.ledger import Account, Posting, Transaction
@@ -97,12 +98,10 @@ def near_term_window_end(session: Session, today: date) -> date:
     floor_days = profile.near_term_floor_days if profile else 7
     fallback_days = profile.near_term_fallback_days if profile else 30
 
-    next_income = session.scalars(
-        select(ExpectedIncome.next_expected_date)
-        .where(ExpectedIncome.active.is_(True))
-        .where(ExpectedIncome.next_expected_date >= today)
-        .order_by(ExpectedIncome.next_expected_date)
-    ).first()
+    # Derived from the recurrence rule, never read off a stored column: a stored
+    # "next" date is in the past the day after payday, and this silently fell
+    # back to a 30-day window when it was.
+    next_income = income_next_date(session, today)
 
     if next_income is None:
         return today + timedelta(days=fallback_days)
