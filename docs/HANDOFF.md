@@ -21,11 +21,12 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 9 | Intelligence — explanations, recommendations | ✗ |
 | 10 | Polish, backups, hosting | ✗ |
 
-**Phases 0–5 complete.** 313 tests.
+**Phases 0–5 complete.** 338 tests.
 
 Frontend has six screens — dashboard, transactions, analytics, budgets, calendar and goals — and
-every nav item is live. Budgets, goals and commitments can all be created from the UI. The Add button records expenses, income,
-transfers/debt payments and refunds as balanced two-leg transactions. The transactions screen
+every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
+The Add button records expenses, income, transfers/debt payments and refunds as balanced two-leg
+transactions. The transactions screen
 lists history, shows each row's effect on liquid cash, and offers Void as the correction path;
 voided rows are hidden by default and never deleted.
 
@@ -123,15 +124,15 @@ each with named tests.
 
 ### Product gaps
 
-3. Deleting. Budgets, goals and commitments can be created and edited, and archived via an
+1. Deleting. Budgets, goals and commitments can be created and edited, and archived via an
    active flag, but there is no delete — which is probably correct for a ledger-adjacent app,
    though nothing says so explicitly yet.
-4. `rollover_reset` works but no UI reaches it, and a budget's period/anchor cannot be changed
+2. `rollover_reset` works but no UI reaches it, and a budget's period/anchor cannot be changed
    after creation (deliberately — that reshapes every historical boundary).
-5. XLSX and PDF export (plan §10 lists four formats; CSV — both posting-level and summary — and
+3. XLSX and PDF export (plan §10 lists four formats; CSV — both posting-level and summary — and
    JSON are built).
-6. No restore *UI* — restoring means POSTing a file to the API by hand.
-7. Transaction editing. Void plus re-enter is the only correction path; there is no edit for
+4. No restore *UI* — restoring means POSTing a file to the API by hand.
+5. Transaction editing. Void plus re-enter is the only correction path; there is no edit for
    non-monetary fields, which §2 of the rulebook permits.
 
 ### Goal integrity coverage
