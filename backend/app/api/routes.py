@@ -129,6 +129,7 @@ def create_transaction(
         ),
         description=payload.description,
         merchant=payload.merchant,
+        reimburses_id=payload.reimburses_id,
     )
     for leg in payload.postings:
         txn.postings.append(

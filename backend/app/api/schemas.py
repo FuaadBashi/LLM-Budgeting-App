@@ -67,6 +67,9 @@ class TransactionIn(BaseModel):
     description: str = ""
     merchant: str | None = None
     postings: list[PostingIn] = Field(min_length=2)
+    #: Links this transaction to the expense it repays, so budget spend can be
+    #: netted down. Without it a reimbursed expense still consumes the budget.
+    reimburses_id: uuid.UUID | None = None
 
     @field_validator("postings")
     @classmethod

@@ -35,6 +35,7 @@ from app.domain.periods import (
     period_state,
 )
 from app.domain.projection import Projection, project
+from app.domain.reimbursement import netting_by_booking_date
 from app.domain.spend import spend_by_booking_date, total_between
 from app.models.enums import RolloverPolicy
 from app.models.planning import Budget, BudgetRevision
@@ -172,6 +173,12 @@ def chain(
     daily = spend_by_booking_date(
         session, budget.category_id, budget.start_date, horizon_end
     )
+    # A reimbursed expense is not spending. Without this a £600 work trip repaid
+    # in full still consumes a £600 budget, while an identical merchant refund
+    # does not -- the outcome would turn on who sent the money back.
+    offsets, reimbursement_excess = netting_by_booking_date(
+        session, budget.category_id, budget.start_date, horizon_end
+    )
 
     p = period_for(budget.period, budget.start_date, budget.anchor_date)
     rollover_in = ZERO
@@ -199,7 +206,7 @@ def chain(
         hi = min(p.end, budget.end_date) if budget.end_date else p.end
         is_partial = lo != p.start or hi != p.end
 
-        spent = total_between(daily, lo, hi)
+        spent = total_between(daily, lo, hi) - total_between(offsets, lo, hi)
         remaining = rev.amount + rollover_in - spent
 
         results.append(
