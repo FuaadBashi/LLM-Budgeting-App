@@ -23,8 +23,8 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 
 **Phases 0–5 complete.** 313 tests.
 
-Frontend has three screens: the dashboard, `/transactions` and `/analytics`. Budgets, Calendar
-and Goals are still `soon` and their nav items are disabled. The Add button records expenses, income,
+Frontend has four screens: the dashboard, `/transactions`, `/analytics` and `/goals`. Budgets
+and Calendar are still `soon` and their nav items are disabled. The Add button records expenses, income,
 transfers/debt payments and refunds as balanced two-leg transactions. The transactions screen
 lists history, shows each row's effect on liquid cash, and offers Void as the correction path;
 voided rows are hidden by default and never deleted.
@@ -123,8 +123,8 @@ each with named tests.
 
 ### Product gaps
 
-3. Budget, goal and obligation management screens. The API supports the reads and writes; only
-   the dashboard and transactions list have a UI.
+3. Budget and obligation management screens. Both have full API support; only goals have a UI.
+   Creating a budget or an obligation still means curl.
 4. `Budget.end_date` and `rollover_reset` work but no UI reaches them.
 5. XLSX and PDF export (plan §10 lists four formats; CSV — both posting-level and summary — and
    JSON are built).

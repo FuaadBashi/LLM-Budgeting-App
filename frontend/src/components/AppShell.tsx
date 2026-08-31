@@ -27,7 +27,7 @@ const NAV: Item[] = [
   { key: "analytics", label: "Analytics", icon: <IconChart />, href: "/analytics" },
   { key: "budgets", label: "Budgets", icon: <IconMeter /> },
   { key: "calendar", label: "Calendar", icon: <IconCalendar /> },
-  { key: "goals", label: "Goals", icon: <IconTarget /> },
+  { key: "goals", label: "Goals", icon: <IconTarget />, href: "/goals" },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {

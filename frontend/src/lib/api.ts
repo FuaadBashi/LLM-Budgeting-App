@@ -153,6 +153,45 @@ export interface PeriodSummary {
   by_merchant: [string, Minor][];
 }
 
+export interface Goal {
+  id: string;
+  name: string;
+  target_amount_minor: Minor;
+  target_date: string | null;
+  priority: "critical" | "high" | "medium" | "optional";
+  /** Whether safe-to-spend reserves this goal's contribution. */
+  protected: boolean;
+  protected_override: boolean | null;
+  planned_contribution_minor: Minor;
+  attributed_balance_minor: Minor;
+  account_id: string | null;
+  active: boolean;
+  progress: number | null;
+}
+
+export interface BudgetSummary {
+  id: string;
+  name: string;
+  period: string;
+  start_date: string;
+  end_date: string | null;
+  anchor_date: string | null;
+  category_id: string | null;
+  current_amount_minor: Minor;
+  rollover_policy: string;
+}
+
+export interface Obligation {
+  id: string;
+  name: string;
+  amount_minor: Minor;
+  first_due_date: string;
+  end_date: string | null;
+  rrule: string | null;
+  hard: boolean;
+  active: boolean;
+}
+
 export interface NetWorth {
   net_worth_minor: Minor;
   as_of: string;
@@ -292,6 +331,13 @@ export const createTransaction = (input: TransactionInput) =>
 export const getBudgets = () => get<BudgetPeriod[]>("/dashboard/budgets");
 export const getRecovery = () => get<Recovery>("/dashboard/recovery");
 export const getNetWorth = () => get<NetWorth>("/dashboard/net-worth");
+export const getGoals = () => get<Goal[]>("/goals");
+export const getBudgetList = () => get<BudgetSummary[]>("/budgets");
+export const getObligations = () => get<Obligation[]>("/obligations");
+
+export const createGoal = (body: unknown) => post<Goal>("/goals", body);
+export const createBudget = (body: unknown) => post<BudgetSummary>("/budgets", body);
+export const createObligation = (body: unknown) => post<Obligation>("/obligations", body);
 export const getPeriodSummary = (start?: string, end?: string) =>
   get<PeriodSummary>(
     start && end ? `/analytics/period?start=${start}&end=${end}` : "/analytics/period",

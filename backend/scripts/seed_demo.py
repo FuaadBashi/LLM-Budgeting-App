@@ -31,6 +31,7 @@ from app.models import (  # noqa: E402
     CategoryNature,
     ExpectedIncome,
     FutureObligation,
+    GoalContribution,
     GoalPriority,
     Posting,
     RolloverPolicy,
@@ -142,19 +143,44 @@ def main() -> None:
                            rollover_policy=RolloverPolicy.NONE),
         ])
 
-        session.add_all([
-            SavingsGoal(name="Emergency Fund", target_amount=Decimal("10000"),
-                        target_date=date(2027, 8, 31), priority=GoalPriority.CRITICAL,
-                        planned_contribution=Decimal("500"), account_id=savings.id),
-            SavingsGoal(name="Holiday", target_amount=Decimal("2000"),
-                        target_date=date(2027, 6, 1), priority=GoalPriority.OPTIONAL,
-                        planned_contribution=Decimal("150")),
-            # Salary recurs too -- without a rule the projected curve shows rent
-            # every month against a single payday and slides downhill forever.
-            ExpectedIncome(name="Salary", amount=Decimal("2500"),
-                           first_expected_date=date(2026, 9, 1),
-                           rrule=build_rule(Frequency.MONTHLY, date(2026, 9, 1))),
-        ])
+        # Goals, with the emergency fund's existing balance attributed to it --
+        # otherwise every goal reads 0% despite the savings account holding money.
+        emergency = SavingsGoal(
+            name="Emergency Fund",
+            target_amount=Decimal("10000"),
+            target_date=date(2027, 8, 31),
+            priority=GoalPriority.CRITICAL,
+            planned_contribution=Decimal("500"),
+            account_id=savings.id,
+        )
+        holiday = SavingsGoal(
+            name="Holiday",
+            target_amount=Decimal("2000"),
+            target_date=date(2027, 6, 1),
+            priority=GoalPriority.OPTIONAL,
+            planned_contribution=Decimal("150"),
+        )
+        session.add_all([emergency, holiday])
+        session.flush()
+
+        # Attribution, not movement: the money is already in the savings account.
+        # Invariant G1 caps this at that account's balance.
+        session.add(
+            GoalContribution(
+                goal_id=emergency.id,
+                amount=Decimal("4500"),
+                booking_date=date(2026, 8, 3),
+            )
+        )
+
+        session.add(
+            ExpectedIncome(
+                name="Salary",
+                amount=Decimal("2500"),
+                first_expected_date=date(2026, 9, 1),
+                rrule=build_rule(Frequency.MONTHLY, date(2026, 9, 1)),
+            )
+        )
 
         # Rent is a recurring commitment, not just a past transaction: the
         # forecast needs the rule so future months are already accounted for.
