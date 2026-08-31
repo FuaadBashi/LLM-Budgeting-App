@@ -13,7 +13,12 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.enums import AccountKind, CategoryNature, TransactionClass
+from app.models.enums import (
+    AccountKind,
+    CategoryNature,
+    TransactionClass,
+    TransactionStatus,
+)
 
 MINOR_UNITS = Decimal("100")
 
@@ -107,6 +112,9 @@ class TransactionOut(BaseModel):
     merchant: str | None
     classification: TransactionClass
     postings: list[PostingOut]
+    status: TransactionStatus
+    #: The net movement across liquid accounts -- what the transaction did to cash.
+    cash_effect_minor: int
     #: Populated on create. Empty when no budget's allowance moved.
     budget_impacts: list[BudgetImpactOut] = []
 

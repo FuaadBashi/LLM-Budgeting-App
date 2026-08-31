@@ -1,3 +1,7 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { TransactionEntry } from "@/components/TransactionEntry";
 
@@ -14,14 +18,15 @@ import { TransactionEntry } from "@/components/TransactionEntry";
  * is worse than one that says it is coming.
  */
 
-type Item = { key: string; label: string; icon: ReactNode; ready: boolean };
+type Item = { key: string; label: string; icon: ReactNode; href?: string };
 
+//: An item without an href is not built yet, and says so rather than pretending.
 const NAV: Item[] = [
-  { key: "dashboard", label: "Dashboard", icon: <IconHome />, ready: true },
-  { key: "transactions", label: "Transactions", icon: <IconList />, ready: false },
-  { key: "budgets", label: "Budgets", icon: <IconMeter />, ready: false },
-  { key: "calendar", label: "Calendar", icon: <IconCalendar />, ready: false },
-  { key: "goals", label: "Goals", icon: <IconTarget />, ready: false },
+  { key: "dashboard", label: "Dashboard", icon: <IconHome />, href: "/" },
+  { key: "transactions", label: "Transactions", icon: <IconList />, href: "/transactions" },
+  { key: "budgets", label: "Budgets", icon: <IconMeter /> },
+  { key: "calendar", label: "Calendar", icon: <IconCalendar /> },
+  { key: "goals", label: "Goals", icon: <IconTarget /> },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -93,37 +98,75 @@ export function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
+function useIsCurrent(href?: string) {
+  const pathname = usePathname();
+  if (!href) return false;
+  return href === "/" ? pathname === "/" : pathname.startsWith(href);
+}
+
 function SidebarLink({ item }: { item: Item }) {
-  const style = item.ready
-    ? { background: "var(--accent-soft)", color: "var(--accent)" }
-    : { color: "var(--text-muted)" };
+  const current = useIsCurrent(item.href);
+  const className =
+    "navlink flex items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2 text-sm font-medium";
+
+  if (!item.href) {
+    return (
+      <span
+        className={className}
+        style={{ color: "var(--text-muted)" }}
+        aria-disabled
+        title="Not built yet"
+      >
+        {item.icon}
+        {item.label}
+        <span className="ml-auto text-[10px] uppercase tracking-wide">soon</span>
+      </span>
+    );
+  }
   return (
-    <span
-      className="navlink flex items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2 text-sm font-medium"
-      style={style}
-      aria-current={item.ready ? "page" : undefined}
-      aria-disabled={!item.ready}
-      title={item.ready ? undefined : "Not built yet"}
+    <Link
+      href={item.href}
+      className={className}
+      aria-current={current ? "page" : undefined}
+      style={
+        current
+          ? { background: "var(--accent-soft)", color: "var(--accent)" }
+          : { color: "var(--text-secondary)" }
+      }
     >
       {item.icon}
       {item.label}
-      {!item.ready && (
-        <span className="ml-auto text-[10px] uppercase tracking-wide">soon</span>
-      )}
-    </span>
+    </Link>
   );
 }
 
 function BottomLink({ item }: { item: Item }) {
+  const current = useIsCurrent(item.href);
+  const className = "flex flex-1 flex-col items-center gap-1 py-2 text-[10px]";
+  const colour = !item.href
+    ? "var(--text-muted)"
+    : current
+      ? "var(--accent)"
+      : "var(--text-secondary)";
+
+  if (!item.href) {
+    return (
+      <span className={className} style={{ color: colour }} aria-disabled>
+        {item.icon}
+        {item.label}
+      </span>
+    );
+  }
   return (
-    <span
-      className="flex flex-1 flex-col items-center gap-1 py-2 text-[10px]"
-      style={{ color: item.ready ? "var(--accent)" : "var(--text-muted)" }}
-      aria-disabled={!item.ready}
+    <Link
+      href={item.href}
+      className={className}
+      style={{ color: colour }}
+      aria-current={current ? "page" : undefined}
     >
       {item.icon}
       {item.label}
-    </span>
+    </Link>
   );
 }
 

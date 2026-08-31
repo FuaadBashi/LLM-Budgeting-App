@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -33,7 +34,14 @@ from app.domain.classification import classify
 from app.domain.clock import today as clock_today
 from app.domain.impact import assess_transaction
 from app.domain.disposable import account_balances, compute_safe_to_spend, net_worth
-from app.models import Account, Category, Posting, Transaction
+from app.models import (
+    Account,
+    Category,
+    Posting,
+    Transaction,
+    TransactionStatus,
+)
+from app.models.enums import LIQUID_KINDS
 
 router = APIRouter()
 
@@ -101,11 +109,20 @@ def list_categories(session: Session = Depends(get_session)) -> list[Category]:
 
 
 def _to_out(txn: Transaction, kinds: dict) -> TransactionOut:
+    # What the transaction did to spendable cash. A card purchase moves a budget
+    # but not cash, so the two figures legitimately differ (register item X2) --
+    # showing it here means the list never has to be reconciled by eye.
+    cash_effect = sum(
+        (p.amount for p in txn.postings if kinds.get(p.account_id) in LIQUID_KINDS),
+        Decimal("0"),
+    )
     return TransactionOut(
         id=txn.id,
         booking_date=txn.booking_date,
         description=txn.description,
         merchant=txn.merchant,
+        status=txn.status,
+        cash_effect_minor=to_minor(cash_effect),
         classification=classify(txn, kinds),
         postings=[
             PostingOut(
@@ -169,13 +186,56 @@ def create_transaction(
 
 @router.get("/transactions", response_model=list[TransactionOut])
 def list_transactions(
-    limit: int = 50, session: Session = Depends(get_session)
+    limit: int = 50,
+    offset: int = 0,
+    include_voided: bool = False,
+    session: Session = Depends(get_session),
 ) -> list[TransactionOut]:
+    """Most recent first. Voided rows are hidden unless asked for.
+
+    They are never deleted (invariant L3), so they stay reachable -- an audit
+    trail you cannot see is not much of one.
+    """
     kinds = {a.id: a.kind for a in session.scalars(select(Account))}
+    query = select(Transaction)
+    if not include_voided:
+        query = query.where(Transaction.status != TransactionStatus.VOIDED)
     rows = session.scalars(
-        select(Transaction).order_by(Transaction.booking_date.desc()).limit(limit)
+        query.order_by(
+            Transaction.booking_date.desc(), Transaction.created_at.desc()
+        )
+        .offset(max(0, offset))
+        .limit(min(200, max(1, limit)))
     )
     return [_to_out(t, kinds) for t in rows]
+
+
+@router.post("/transactions/{transaction_id}/void", response_model=TransactionOut)
+def void_transaction(
+    transaction_id: uuid.UUID, session: Session = Depends(get_session)
+) -> TransactionOut:
+    """Mark a transaction as never having happened.
+
+    Voiding is the correction path for a mis-entry; a genuine reversal is a new
+    transaction carrying reverses_id. Doing both removes the money twice, which
+    the L3 trigger makes unrepresentable -- so a transaction that has already
+    been reversed is rejected here rather than silently double-counted.
+    """
+    txn = session.get(Transaction, transaction_id)
+    if txn is None:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    if txn.status == TransactionStatus.VOIDED:
+        raise HTTPException(status_code=422, detail="transaction is already voided")
+
+    txn.status = TransactionStatus.VOIDED
+    try:
+        session.commit()
+    except DatabaseError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc.orig)) from exc
+
+    kinds = {a.id: a.kind for a in session.scalars(select(Account))}
+    return _to_out(txn, kinds)
 
 
 # --------------------------------------------------------------------------

@@ -44,13 +44,26 @@ export interface TransactionInput {
   postings: PostingInput[];
 }
 
+export interface BudgetImpact {
+  budget_id: string;
+  budget_name: string;
+  allowance_before_minor: Minor;
+  allowance_after_minor: Minor;
+  delta_minor: Minor;
+  material: boolean;
+}
+
 export interface Transaction {
   id: string;
   booking_date: string;
   description: string;
   merchant: string | null;
   classification: string;
+  status: "candidate" | "posted" | "voided";
+  /** Effect on liquid cash. Zero for a card purchase (register item X2). */
+  cash_effect_minor: Minor;
   postings: (PostingInput & { id: string; category_id: string | null })[];
+  budget_impacts: BudgetImpact[];
 }
 
 export interface Warning {
@@ -188,6 +201,19 @@ export const createTransaction = (input: TransactionInput) =>
 export const getBudgets = () => get<BudgetPeriod[]>("/dashboard/budgets");
 export const getRecovery = () => get<Recovery>("/dashboard/recovery");
 export const getNetWorth = () => get<NetWorth>("/dashboard/net-worth");
+export const getTransactions = (limit = 100, includeVoided = false) =>
+  get<Transaction[]>(
+    `/transactions?limit=${limit}&include_voided=${includeVoided}`,
+  );
+
+export async function voidTransaction(id: string): Promise<Transaction> {
+  const res = await fetch(`${BASE}/transactions/${id}/void`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `void failed (${res.status})`);
+  }
+  return res.json() as Promise<Transaction>;
+}
 export const getCalendar = () =>
   get<FinancialCalendar>("/dashboard/calendar?until=" + horizon());
 

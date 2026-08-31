@@ -137,3 +137,123 @@ def test_repeated_thirds_do_not_drift():
     total = sum((from_minor(10), from_minor(20)), Decimal("0"))
     assert total == Decimal("0.30")
     assert to_minor(total) == 30
+
+
+# --------------------------------------------------------------------------
+# Listing and voiding
+# --------------------------------------------------------------------------
+
+
+def test_voiding_removes_a_transaction_from_every_figure(client, session, accounts):
+    """The correction path for a mis-entry. Nothing is deleted (L3)."""
+    from app.domain.disposable import account_balances
+    from decimal import Decimal as D
+
+    body = {
+        "booking_date": "2026-08-15",
+        "description": "Typo",
+        "postings": [
+            {"account_id": str(accounts["current"].id), "amount_minor": -60000},
+            {"account_id": str(accounts["groceries"].id), "amount_minor": 60000},
+        ],
+    }
+    txn_id = client.post("/api/transactions", json=body).json()["id"]
+    assert account_balances(session)[accounts["current"].id] == D("400.00")
+
+    r = client.post(f"/api/transactions/{txn_id}/void")
+    assert r.status_code == 200
+    assert r.json()["status"] == "voided"
+    assert account_balances(session)[accounts["current"].id] == D("1000.00")
+
+
+def test_voided_transactions_are_hidden_but_retrievable(client, accounts):
+    body = {
+        "booking_date": "2026-08-15",
+        "description": "Typo",
+        "postings": [
+            {"account_id": str(accounts["current"].id), "amount_minor": -100},
+            {"account_id": str(accounts["groceries"].id), "amount_minor": 100},
+        ],
+    }
+    txn_id = client.post("/api/transactions", json=body).json()["id"]
+    client.post(f"/api/transactions/{txn_id}/void")
+
+    assert client.get("/api/transactions").json() == []
+    kept = client.get("/api/transactions?include_voided=true").json()
+    assert [t["id"] for t in kept] == [txn_id]
+
+
+def test_voiding_twice_is_rejected(client, accounts):
+    body = {
+        "booking_date": "2026-08-15",
+        "description": "Typo",
+        "postings": [
+            {"account_id": str(accounts["current"].id), "amount_minor": -100},
+            {"account_id": str(accounts["groceries"].id), "amount_minor": 100},
+        ],
+    }
+    txn_id = client.post("/api/transactions", json=body).json()["id"]
+    assert client.post(f"/api/transactions/{txn_id}/void").status_code == 200
+    assert client.post(f"/api/transactions/{txn_id}/void").status_code == 422
+
+
+def test_voiding_an_already_reversed_transaction_is_rejected(client, session, accounts):
+    """L3: one correction mechanism. Doing both removes the money twice."""
+    body = {
+        "booking_date": "2026-08-15",
+        "description": "Rent",
+        "postings": [
+            {"account_id": str(accounts["current"].id), "amount_minor": -60000},
+            {"account_id": str(accounts["groceries"].id), "amount_minor": 60000},
+        ],
+    }
+    original = client.post("/api/transactions", json=body).json()["id"]
+    client.post("/api/transactions", json={
+        "booking_date": "2026-08-16",
+        "description": "Rent reversal",
+        "reimburses_id": None,
+        "postings": [
+            {"account_id": str(accounts["current"].id), "amount_minor": 60000},
+            {"account_id": str(accounts["groceries"].id), "amount_minor": -60000},
+        ],
+    })
+    # Link it as a reversal directly, then try to void as well.
+    from app.models import Transaction
+    from sqlalchemy import select
+    rev = session.scalars(
+        select(Transaction).where(Transaction.description == "Rent reversal")
+    ).one()
+    rev.reverses_id = original
+    session.commit()
+
+    assert client.post(f"/api/transactions/{original}/void").status_code == 422
+
+
+def test_listing_reports_cash_effect_separately_from_classification(client, accounts):
+    """A card purchase moves a budget but not cash (register item X2)."""
+    body = {
+        "booking_date": "2026-08-15",
+        "description": "Tesco on the card",
+        "postings": [
+            {"account_id": str(accounts["loan"].id), "amount_minor": -4500},
+            {"account_id": str(accounts["groceries"].id), "amount_minor": 4500},
+        ],
+    }
+    r = client.post("/api/transactions", json=body).json()
+    assert r["classification"] == "expense"
+    assert r["cash_effect_minor"] == 0
+
+
+def test_listing_paginates(client, accounts):
+    for day in range(1, 6):
+        client.post("/api/transactions", json={
+            "booking_date": f"2026-08-0{day}",
+            "description": f"txn {day}",
+            "postings": [
+                {"account_id": str(accounts["current"].id), "amount_minor": -100},
+                {"account_id": str(accounts["groceries"].id), "amount_minor": 100},
+            ],
+        })
+    page = client.get("/api/transactions?limit=2").json()
+    assert [t["description"] for t in page] == ["txn 5", "txn 4"]
+    assert [t["description"] for t in client.get("/api/transactions?limit=2&offset=2").json()] == ["txn 3", "txn 2"]
