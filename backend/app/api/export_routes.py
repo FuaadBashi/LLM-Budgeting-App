@@ -14,7 +14,7 @@ import json
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.api.schemas import to_minor
 from app.db import get_session
 from app.domain import analytics
+from app.domain import restore as restore_module
 from app.domain.clock import today as clock_today
 from app.domain.ledger_scope import posted_transaction_ids
 from app.models import Account, Category, Posting, Transaction
@@ -227,4 +228,42 @@ def export_json(session: Session = Depends(get_session)) -> StreamingResponse:
         iter([payload]),
         media_type="application/json",
         headers={"Content-Disposition": 'attachment; filename="backup.json"'},
+    )
+
+
+# --------------------------------------------------------------------------
+# Restore (plan section 14)
+# --------------------------------------------------------------------------
+
+
+class RestoreResultOut(BaseModel):
+    accounts: int
+    categories: int
+    transactions: int
+    postings: int
+
+
+@router.post("/restore", response_model=RestoreResultOut)
+async def restore_backup(
+    payload: dict,
+    replace: bool = False,
+    session: Session = Depends(get_session),
+) -> RestoreResultOut:
+    """Rebuild the ledger from a backup produced by /export/backup.json.
+
+    Refuses to overwrite a non-empty database unless `replace` is set: running a
+    restore against the wrong database is the usual way to lose data with one of
+    these. Validation happens before any write, so a malformed file leaves
+    everything untouched.
+    """
+    try:
+        result = restore_module.restore(session, payload, replace=replace)
+    except restore_module.RestoreError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RestoreResultOut(
+        accounts=result.accounts,
+        categories=result.categories,
+        transactions=result.transactions,
+        postings=result.postings,
     )
