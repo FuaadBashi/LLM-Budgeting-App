@@ -35,7 +35,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.domain import importing
+from app.domain import importing, providers
 from app.domain.money import ZERO
 from app.models.enums import AccountKind, CandidateStatus
 from app.models.imports import ImportBatch, ImportCandidate
@@ -96,8 +96,37 @@ class NullReader:
         return ReceiptRead(None, None, None, confident=False)
 
 
+class OpenAICompatibleReader:
+    """Vision through the OpenAI `image_url` shape, as a base64 data URI.
+
+    Inline bytes rather than a link: a URL would mean hosting a photograph of a
+    receipt somewhere, and the point of the local option is that it never leaves.
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str) -> None:
+        self._base_url = base_url
+        self._key = api_key
+        self.model = model
+
+    def read(self, image: bytes, media_type: str) -> ReceiptRead:
+        try:
+            text = providers.chat(
+                base_url=self._base_url,
+                api_key=self._key,
+                model=self.model,
+                prompt=PROMPT,
+                max_tokens=512,
+                image=image,
+                image_media_type=media_type,
+            )
+        except providers.ProviderError as exc:
+            log.warning("receipt read failed: %s", exc)
+            return NullReader().read(image, media_type)
+        return parse(text)
+
+
 class ClaudeReader:
-    """Vision-backed. Constructed only when a key exists."""
+    """Vision-backed. Constructed only when the anthropic provider is chosen."""
 
     def __init__(self, api_key: str, model: str) -> None:
         self._key = api_key
@@ -179,10 +208,15 @@ def parse(text: str) -> ReceiptRead:
 
 
 def build_reader() -> Reader | NullReader:
-    """A3: no key, no feature."""
-    if not settings.anthropic_api_key:
-        return NullReader()
-    return ClaudeReader(settings.anthropic_api_key, settings.llm_vision_model)
+    """A3: the same provider decision, for the vision model."""
+    provider = (settings.llm_provider or "none").strip().lower()
+    if provider == "openai_compatible":
+        return OpenAICompatibleReader(
+            settings.llm_base_url, settings.llm_api_key, settings.llm_vision_model
+        )
+    if provider == "anthropic" and settings.anthropic_api_key:
+        return ClaudeReader(settings.anthropic_api_key, settings.llm_vision_model)
+    return NullReader()
 
 
 def stage(

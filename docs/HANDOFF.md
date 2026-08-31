@@ -107,26 +107,26 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X19 | The app is unchanged with no API key (A3) | ✅ `test_enrichment.py` — import works, no network, no error |
 | X20 | A receipt reaches the ledger only through the candidate inbox (A1') | ✅ `test_receipts.py` — staging leaves balances and transaction count untouched |
 
-### Assisted categorisation (Phase 11)
+### Assisted categorisation and receipt reading (Phases 7 and 11)
 
-`ANTHROPIC_API_KEY` is **optional and empty by default** — without it every suggestion path is a
-no-op and the app behaves exactly as before (A3). An Anthropic Console key is a separate product
-from a Claude.ai subscription. Install the client with `pip install -e '.[llm]'`.
+**Off by default.** `LLM_PROVIDER=none` means no model feature runs and nothing is called. A key
+left in `.env` does not switch anything on — choosing a provider is the deliberate act.
+
+| Provider | `LLM_PROVIDER` | Notes |
+|---|---|---|
+| Ollama (local) | `openai_compatible` | Free, no key, **nothing leaves the machine**. `LLM_BASE_URL=http://localhost:11434/v1` |
+| Groq / OpenRouter / Together / LM Studio | `openai_compatible` | Same code path; set base URL and key |
+| Anthropic | `anthropic` | Needs the optional extra: `pip install -e '.[llm]'` |
+
+The open-model path uses `httpx`, already a FastAPI dependency, so it needs **no extra package**.
+
+For financial data the local option is worth defaulting to. Merchant names are a spending
+profile; Ollama keeps them on the machine and costs nothing.
 
 The cost design is the cache, not the prompt. `merchant_suggestions` is keyed on
 `normalise_description` — the same function duplicate detection uses — so every variant of
 `TESCO STORES 3421` collapses to one row and one question. A merchant is asked about once, ever;
-a user correction is stored as theirs and outranks the model permanently (A2). Running cost
-converges on zero rather than scaling with transaction count.
-
-The model may only pick a name from the category list supplied to it; anything else becomes no
-category (A1). There is no path by which model output becomes an amount, date or balance.
-
-**A1 and A1'.** Categorisation holds the strong form: the model picks from a supplied list and
-*cannot* produce a figure. Receipts cannot — the amount is the thing being read — so the
-invariant there is the weaker, honest one: **no model output reaches the ledger without a person
-confirming it.** A receipt becomes an `ImportCandidate` and passes the same gate a bank row does.
-That is why receipts reuse Phase 6's plumbing instead of adding a second route to the ledger.
+a user correction is stored as theirs and outranks the model permanently (A2).
 
 **Recommended next task.** Hosting. OCR is the expensive one — its
 candidate-inbox plumbing now exists so it is unblocked, but it needs a HTTPS in front of it and `COOKIE_SECURE=true`, as described above. Hosting is

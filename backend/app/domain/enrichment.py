@@ -10,9 +10,10 @@ the narrowest possible opening. Three invariants:
 * **A2 — a person outranks the model.** When the user picks a different category
   while accepting a candidate, that choice is written to the cache as theirs and
   the model never overwrites it. The cache gets better with use.
-* **A3 — no key means no feature, not a broken app.** With `ANTHROPIC_API_KEY`
-  unset, every function here returns nothing, makes no network call, and raises
-  nothing. Suggestions are an accelerant, never a dependency.
+* **A3 — no provider means no feature, not a broken app.** `LLM_PROVIDER`
+  defaults to `none`: every function here returns nothing, makes no network
+  call, and raises nothing. Suggestions are an accelerant, never a dependency.
+  Choosing a provider is a deliberate act, not something a stray key enables.
 
 The cost design is the cache, not the prompt. Keys are `normalise_description`
 output -- the same function duplicate detection uses -- so every variant of
@@ -32,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.domain import providers
 from app.domain.importing import normalise_description
 from app.models.enrichment import MerchantSuggestion
 from app.models.enums import SuggestionSource
@@ -76,7 +78,7 @@ class Suggester(Protocol):
 
 
 class NullSuggester:
-    """A3. What runs when there is no API key: nothing, quietly."""
+    """A3. What runs when no provider is chosen: nothing, quietly."""
 
     model = ""
 
@@ -86,12 +88,42 @@ class NullSuggester:
         return {}
 
 
-class ClaudeSuggester:
-    """Anthropic-backed. Constructed only when a key exists.
+class OpenAICompatibleSuggester:
+    """Ollama, Groq, OpenRouter, Together, LM Studio -- one shape covers them.
 
-    The SDK import is lazy so the package is not required to run the app, and so
-    the test suite never imports a network client it has no intention of using.
+    Uses `httpx`, which FastAPI already pulls in, so an open-model setup needs no
+    extra package at all.
     """
+
+    def __init__(self, base_url: str, api_key: str, model: str, max_tokens: int):
+        self._base_url = base_url
+        self._key = api_key
+        self.model = model
+        self._max_tokens = max_tokens
+
+    def suggest(
+        self, descriptions: list[str], categories: list[str]
+    ) -> dict[str, str | None]:
+        prompt = PROMPT.format(
+            categories="\n".join(f"- {c}" for c in categories),
+            descriptions="\n".join(f"- {d}" for d in descriptions),
+        )
+        try:
+            text = providers.chat(
+                base_url=self._base_url,
+                api_key=self._key,
+                model=self.model,
+                prompt=prompt,
+                max_tokens=self._max_tokens,
+            )
+        except providers.ProviderError as exc:
+            log.warning("suggestion request failed: %s", exc)
+            return {}
+        return _parse(text)
+
+
+class ClaudeSuggester:
+    """Anthropic-backed. The SDK is an optional extra, imported lazily."""
 
     def __init__(self, api_key: str, model: str, max_tokens: int) -> None:
         self._key = api_key
@@ -153,12 +185,24 @@ def _parse(text: str) -> dict[str, str | None]:
 
 
 def build_suggester() -> Suggester:
-    """A3: no key, no feature. The only place that decision is made."""
-    if not settings.anthropic_api_key:
-        return NullSuggester()
-    return ClaudeSuggester(
-        settings.anthropic_api_key, settings.llm_model, settings.llm_max_tokens
-    )
+    """A3: the only place the provider decision is made.
+
+    Defaults to `none`, so a fresh checkout has every model feature off and
+    makes no network call until someone opts in.
+    """
+    provider = (settings.llm_provider or "none").strip().lower()
+    if provider == "openai_compatible":
+        return OpenAICompatibleSuggester(
+            settings.llm_base_url,
+            settings.llm_api_key,
+            settings.llm_model,
+            settings.llm_max_tokens,
+        )
+    if provider == "anthropic" and settings.anthropic_api_key:
+        return ClaudeSuggester(
+            settings.anthropic_api_key, settings.llm_model, settings.llm_max_tokens
+        )
+    return NullSuggester()
 
 
 def cached(session: Session, descriptions: list[str]) -> dict[str, MerchantSuggestion]:

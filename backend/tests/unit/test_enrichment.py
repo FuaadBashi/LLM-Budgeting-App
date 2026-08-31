@@ -2,7 +2,7 @@
 
 * A1 -- the model never produces a figure; it may only pick an existing category
 * A2 -- a person's choice outranks the model and is never overwritten
-* A3 -- no API key means no feature, not a broken app
+* A3 -- no provider means no feature, not a broken app
 
 Nothing here touches the network. The suggester is a protocol and every test
 supplies its own, which is the point of it being a protocol.
@@ -72,24 +72,69 @@ def upload(client, account_id, text=ISO, filename="statement.csv"):
 # --------------------------------------------------------------------------
 
 
-def test_no_api_key_means_no_suggester(monkeypatch):
-    """A3. The single place that decision is made."""
+def test_no_provider_means_no_suggester(monkeypatch):
+    """A3, and the default. A fresh checkout calls nothing."""
     from app.config import settings
 
-    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "llm_provider", "none")
     assert isinstance(enrichment.build_suggester(), enrichment.NullSuggester)
 
 
-def test_a_key_builds_a_real_client_without_calling_anything(monkeypatch):
+def test_a_stray_key_does_not_switch_the_feature_on(monkeypatch):
+    """Choosing a provider is deliberate. A key left in .env is not consent."""
     from app.config import settings
 
-    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-not-a-real-key")
+    monkeypatch.setattr(settings, "llm_provider", "none")
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-leftover")
+    monkeypatch.setattr(settings, "llm_api_key", "gsk-leftover")
+    assert isinstance(enrichment.build_suggester(), enrichment.NullSuggester)
+
+
+def test_an_unknown_provider_falls_back_to_off_not_an_error(monkeypatch):
+    """A typo in .env must not break the app -- it must turn the feature off."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "gpt4all-maybe")
+    assert isinstance(enrichment.build_suggester(), enrichment.NullSuggester)
+
+
+def test_an_open_model_provider_needs_no_key(monkeypatch):
+    """Ollama and LM Studio want no key at all, and that is the default setup."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "openai_compatible")
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    monkeypatch.setattr(settings, "llm_base_url", "http://localhost:11434/v1")
+    monkeypatch.setattr(settings, "llm_model", "llama3.2")
+
     built = enrichment.build_suggester()
-    assert isinstance(built, enrichment.ClaudeSuggester)
-    assert built.model == settings.llm_model
+    assert isinstance(built, enrichment.OpenAICompatibleSuggester)
+    assert built.model == "llama3.2"
 
 
-def test_resolving_with_no_key_returns_nothing_and_raises_nothing(session, categories):
+def test_the_anthropic_provider_still_works_when_chosen(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-placeholder")
+    assert isinstance(enrichment.build_suggester(), enrichment.ClaudeSuggester)
+
+
+def test_an_unreachable_local_server_is_not_an_exception(monkeypatch):
+    """Ollama not running is the normal failure. It must not fail an import.
+
+    Port 1 refuses immediately, so this exercises the error path without waiting
+    on a timeout and without reaching any real service.
+    """
+    suggester = enrichment.OpenAICompatibleSuggester(
+        "http://127.0.0.1:1/v1", "", "llama3.2", 256
+    )
+    assert suggester.suggest(["TESCO"], ["Groceries"]) == {}
+
+
+def test_resolving_with_no_provider_returns_nothing_and_raises_nothing(
+    session, categories
+):
     assert enrichment.resolve(
         session, ["TESCO STORES 3421"], suggester=enrichment.NullSuggester()
     ) == {}

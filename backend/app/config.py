@@ -31,18 +31,27 @@ class Settings(BaseSettings):
     #: must not be a data-loss event.
     backup_keep: int = 14
 
-    #: Anthropic API key. Empty means every LLM feature is simply off -- the app
-    #: works exactly as it does without one, with no suggestions. A separate
-    #: product from a Claude.ai subscription; get one at console.anthropic.com.
-    anthropic_api_key: str = ""
-    #: Classification is a small-model job. Reserve larger models for prose.
-    llm_model: str = "claude-haiku-4-5-20251001"
+    #: Which provider to use. "none" is the default and means every model
+    #: feature is off. "openai_compatible" covers Ollama, Groq, OpenRouter,
+    #: Together, LM Studio and anything else speaking that shape. "anthropic"
+    #: uses the Anthropic SDK, which is an optional extra.
+    llm_provider: str = "none"
+    #: Chat-completions base URL, including /v1. Ignored by the anthropic
+    #: provider. Local default: http://localhost:11434/v1
+    llm_base_url: str = "http://localhost:11434/v1"
+    #: Empty is correct for Ollama and LM Studio, which want no key.
+    llm_api_key: str = ""
+    #: Classification is a small-model job. Reserve larger ones for prose.
+    llm_model: str = "llama3.2"
     #: Hard ceiling on a single reply. Categorisation answers are a few tokens;
     #: this is a runaway guard, not a target.
     llm_max_tokens: int = 256
-    #: Reading a receipt is a vision task and needs a more capable model than
-    #: classification does. Still the cheapest one that reads crumpled paper.
-    llm_vision_model: str = "claude-sonnet-5"
+    #: Reading a receipt needs a vision model, which is a different and usually
+    #: larger one than classification uses.
+    llm_vision_model: str = "llama3.2-vision"
+    #: Only read by the anthropic provider. Kept separate so switching provider
+    #: does not mean rewriting three unrelated settings.
+    anthropic_api_key: str = ""
 
 
 settings = Settings()

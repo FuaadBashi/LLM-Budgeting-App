@@ -234,17 +234,37 @@ def test_the_raw_read_is_kept_verbatim(session, accounts):
 # --------------------------------------------------------------------------
 
 
-def test_no_api_key_means_no_reader(monkeypatch):
+def test_no_provider_means_no_reader(monkeypatch):
     from app.config import settings
 
-    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "llm_provider", "none")
     assert isinstance(receipts.build_reader(), receipts.NullReader)
 
 
-def test_with_no_key_a_receipt_upload_is_refused_not_crashed(client, accounts, monkeypatch):
+def test_an_open_model_provider_supplies_a_vision_reader(monkeypatch):
     from app.config import settings
 
-    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    monkeypatch.setattr(settings, "llm_provider", "openai_compatible")
+    monkeypatch.setattr(settings, "llm_vision_model", "llama3.2-vision")
+    built = receipts.build_reader()
+    assert isinstance(built, receipts.OpenAICompatibleReader)
+    assert built.model == "llama3.2-vision"
+
+
+def test_an_unreachable_vision_server_reads_nothing_rather_than_raising(monkeypatch):
+    """Ollama not running must refuse the receipt, not crash the upload."""
+    reader = receipts.OpenAICompatibleReader(
+        "http://127.0.0.1:1/v1", "", "llama3.2-vision"
+    )
+    assert not reader.read(JPEG, "image/jpeg").usable
+
+
+def test_with_no_provider_a_receipt_upload_is_refused_not_crashed(
+    client, accounts, monkeypatch
+):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "none")
     r = client.post(
         "/api/import/receipt",
         data={"account_id": str(accounts["current"].id)},
