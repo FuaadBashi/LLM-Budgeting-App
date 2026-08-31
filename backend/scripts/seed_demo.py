@@ -53,11 +53,12 @@ def wipe(session: Session) -> None:
     session.commit()
 
 
-def post(session, when, description, legs) -> Transaction:
+def post(session, when, description, legs, merchant=None) -> Transaction:
     txn = Transaction(
         occurred_at=datetime.combine(when, time(12, 0), tzinfo=timezone.utc),
         booking_date=when,
         description=description,
+        merchant=merchant,
     )
     for account, amount, category in legs:
         txn.postings.append(
@@ -116,10 +117,12 @@ def main() -> None:
              [(current, "-1200", None), (rent_acc, "1200", rent_cat)])
         for day, amount in [(4, "62.40"), (11, "78.15"), (18, "54.90"), (25, "83.20")]:
             post(session, date(2026, 8, day), "Tesco",
-                 [(current, f"-{amount}", None), (groceries_acc, amount, groceries)])
-        for day, amount in [(8, "34.00"), (22, "46.50")]:
+                 [(current, f"-{amount}", None), (groceries_acc, amount, groceries)],
+                 merchant="Tesco")
+        for day, amount, where in [(8, "34.00", "Dishoom"), (22, "46.50", "Padella")]:
             post(session, date(2026, 8, day), "Dinner out",
-                 [(current, f"-{amount}", None), (eating_out, amount, restaurants)])
+                 [(current, f"-{amount}", None), (eating_out, amount, restaurants)],
+                 merchant=where)
         post(session, date(2026, 8, 3), "To savings",
              [(current, "-500", None), (savings, "500", None)])
 

@@ -1,6 +1,8 @@
 import type { Minor } from "./money";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+const BASE = API_BASE;
 
 export interface SafeToSpend {
   safe_to_spend_minor: Minor;
@@ -131,6 +133,24 @@ export interface Recovery {
   breakdown: [string, Minor][];
 }
 
+export interface CategoryTotal {
+  name: string;
+  amount_minor: Minor;
+}
+
+export interface PeriodSummary {
+  start: string;
+  end: string;
+  income_minor: Minor;
+  expense_minor: Minor;
+  saved_minor: Minor;
+  net_minor: Minor;
+  /** Null when there was no income -- not the same as zero. */
+  savings_rate: number | null;
+  by_category: CategoryTotal[];
+  by_merchant: [string, Minor][];
+}
+
 export interface NetWorth {
   net_worth_minor: Minor;
   as_of: string;
@@ -201,6 +221,14 @@ export const createTransaction = (input: TransactionInput) =>
 export const getBudgets = () => get<BudgetPeriod[]>("/dashboard/budgets");
 export const getRecovery = () => get<Recovery>("/dashboard/recovery");
 export const getNetWorth = () => get<NetWorth>("/dashboard/net-worth");
+export const getPeriodSummary = (start?: string, end?: string) =>
+  get<PeriodSummary>(
+    start && end ? `/analytics/period?start=${start}&end=${end}` : "/analytics/period",
+  );
+export const getMonthly = (first?: string, last?: string) =>
+  get<PeriodSummary[]>(
+    first && last ? `/analytics/monthly?first=${first}&last=${last}` : "/analytics/monthly",
+  );
 export const getTransactions = (limit = 100, includeVoided = false) =>
   get<Transaction[]>(
     `/transactions?limit=${limit}&include_voided=${includeVoided}`,

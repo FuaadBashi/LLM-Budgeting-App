@@ -24,6 +24,7 @@ type Item = { key: string; label: string; icon: ReactNode; href?: string };
 const NAV: Item[] = [
   { key: "dashboard", label: "Dashboard", icon: <IconHome />, href: "/" },
   { key: "transactions", label: "Transactions", icon: <IconList />, href: "/transactions" },
+  { key: "analytics", label: "Analytics", icon: <IconChart />, href: "/analytics" },
   { key: "budgets", label: "Budgets", icon: <IconMeter /> },
   { key: "calendar", label: "Calendar", icon: <IconCalendar /> },
   { key: "goals", label: "Goals", icon: <IconTarget /> },
@@ -194,6 +195,15 @@ function IconList() {
         strokeWidth="1.5"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+function IconChart() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path d="M3 17V9M8 17V4M13 17v-6M18 17V7"
+        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
