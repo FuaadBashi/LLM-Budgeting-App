@@ -29,6 +29,7 @@ const NAV: Item[] = [
   { key: "calendar", label: "Calendar", icon: <IconCalendar />, href: "/calendar" },
   { key: "goals", label: "Goals", icon: <IconTarget />, href: "/goals" },
   { key: "simulator", label: "Simulator", icon: <IconFlask />, href: "/simulator" },
+  { key: "import", label: "Import", icon: <IconInbox />, href: "/import" },
   { key: "data", label: "Data", icon: <IconArchive />, href: "/data" },
 ];
 
@@ -275,6 +276,15 @@ function IconArchive() {
       <rect x="2.5" y="3" width="15" height="4" rx="1" />
       <path d="M4 7v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7" />
       <path d="M8 11h4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconInbox() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-5 w-5">
+      <path d="M2.5 12.5h4l1.2 2h4.6l1.2-2h4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.3 4h11.4l1.8 8.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1v-3L4.3 4Z" strokeLinejoin="round" />
     </svg>
   );
 }

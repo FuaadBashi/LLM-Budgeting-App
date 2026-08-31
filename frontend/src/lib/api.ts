@@ -410,6 +410,64 @@ export const getNetWorth = () => get<NetWorth>("/dashboard/net-worth");
 export const getGoals = () => get<Goal[]>("/goals");
 export const getScenarios = () => get<Scenario[]>("/scenarios");
 
+export type CandidateStatus = "pending" | "accepted" | "rejected" | "duplicate";
+
+export interface ImportCandidate {
+  id: string;
+  batch_id: string;
+  row_number: number;
+  booking_date: string;
+  description: string;
+  merchant: string | null;
+  amount_minor: Minor;
+  status: CandidateStatus;
+  duplicate_of_transaction_id: string | null;
+  duplicate_of_candidate_id: string | null;
+  suggested_category_id: string | null;
+  transaction_id: string | null;
+  raw: Record<string, string>;
+}
+
+export interface ImportBatch {
+  id: string;
+  filename: string;
+  account_id: string;
+  profile: string;
+  row_count: number;
+  pending: number;
+  accepted: number;
+  rejected: number;
+  duplicates: number;
+}
+
+export const getImportBatches = () => get<ImportBatch[]>("/import/batches");
+export const getCandidates = (status?: CandidateStatus) =>
+  get<ImportCandidate[]>(`/import/candidates${status ? `?status=${status}` : ""}`);
+export const acceptCandidate = (id: string, body: unknown) =>
+  post<ImportCandidate>(`/import/candidates/${id}/accept`, body);
+export const rejectCandidate = (id: string) =>
+  post<ImportCandidate>(`/import/candidates/${id}/reject`, {});
+export const reopenCandidate = (id: string) =>
+  post<ImportCandidate>(`/import/candidates/${id}/reopen`, {});
+
+/** Multipart, so it cannot go through the JSON helper. */
+export async function uploadStatement(
+  accountId: string,
+  file: File,
+): Promise<ImportBatch> {
+  const body = new FormData();
+  body.append("account_id", accountId);
+  body.append("file", file);
+  const res = await fetch(`${BASE}/import`, {
+    method: "POST",
+    credentials: "include",
+    body,
+  });
+  const parsed = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(parsed?.detail ?? `upload failed (${res.status})`);
+  return parsed as ImportBatch;
+}
+
 export interface RestoreResult {
   accounts: number;
   categories: number;
