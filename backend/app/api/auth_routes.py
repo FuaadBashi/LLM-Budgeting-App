@@ -19,6 +19,7 @@ from app.auth import (
     session_is_valid,
     verify_password,
 )
+from app import ratelimit
 from app.config import settings
 
 router = APIRouter()
@@ -59,12 +60,25 @@ def login(payload: LoginIn, response: Response) -> SessionOut:
         # Nothing to log in to. Say so rather than pretending to accept it.
         return SessionOut(auth_enabled=False, authenticated=True)
 
+    # Refused before the password is even checked, so a throttled attacker
+    # learns nothing and costs nothing. 429 with Retry-After is the standard
+    # shape and is what a client can actually act on.
+    wait = ratelimit.check()
+    if wait:
+        raise HTTPException(
+            status_code=429,
+            detail=f"too many attempts; try again in {wait} seconds",
+            headers={"Retry-After": str(wait)},
+        )
+
     if not verify_password(payload.password, settings.auth_password_hash):
+        ratelimit.record_failure()
         time.sleep(FAILED_ATTEMPT_DELAY_SECONDS)
         # No detail about which part was wrong -- there is only one field, and a
         # more specific message would only help someone guessing.
         raise HTTPException(status_code=401, detail="incorrect password")
 
+    ratelimit.record_success()
     issue_session(response, secure=settings.cookie_secure)
     return SessionOut(auth_enabled=True, authenticated=True)
 

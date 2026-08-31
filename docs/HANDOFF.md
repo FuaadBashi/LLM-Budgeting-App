@@ -19,7 +19,7 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 7 | OCR / vision ingestion | ✅ |
 | 8 | Simulation lab | ✅ |
 | 9 | Intelligence — explanations, recommendations | ✅ |
-| 10 | Polish, backups, hosting | ◐ scheduled backups done; hosting outstanding |
+| 10 | Polish, backups, hosting | ◐ backups and exposure hardening done; the deploy itself is yours |
 | 11 | Assisted categorisation (LLM) | ◐ foundation done; receipt vision outstanding |
 
 **Phases 0–9 complete; Phase 10's backup half is done; Phase 11 (assisted categorisation) is
@@ -66,6 +66,7 @@ live; routes only translate to and from integer minor units.
 | `domain/insights.py` | Observations, each citing evidence (E2); read-only (E3) |
 | `domain/backup.py` | Atomic backup writes, retention, staleness (B-A/B-B/B-C) |
 | `scheduler.py` | The lifespan timer that calls it |
+| `ratelimit.py` | Exponential login backoff, global (there is one password) |
 | `domain/enrichment.py` | Merchant → category, cache-first (A1/A2/A3) |
 | `domain/receipts.py` | Reads a photographed receipt into a candidate (A1') |
 
@@ -128,7 +129,9 @@ The cost design is the cache, not the prompt. `merchant_suggestions` is keyed on
 `TESCO STORES 3421` collapses to one row and one question. A merchant is asked about once, ever;
 a user correction is stored as theirs and outranks the model permanently (A2).
 
-**Recommended next task.** Hosting. OCR is the expensive one — its
+**Recommended next task.** The deploy itself — domain, TLS, wherever it runs — which needs your
+decisions, not more code. After that only two small gaps remain: `rollover_reset` has no UI, and
+transactions cannot be edited for non-monetary fields. OCR is the expensive one — its
 candidate-inbox plumbing now exists so it is unblocked, but it needs a HTTPS in front of it and `COOKIE_SECURE=true`, as described above. Hosting is
 mostly the HTTPS/`COOKIE_SECURE` work already described above. The correctness and security debt
 below are both empty.
@@ -141,9 +144,12 @@ below are both empty.
 
 Nothing outstanding for local use.
 
-**Before exposing it to a network**, two things are still on you rather than on the code:
-set a password (`scripts/set_password.py` writes the hash to `.env`) and terminate HTTPS in front
-of it, then set `COOKIE_SECURE=true`. The app logs a loud warning at startup while unprotected.
+**Before exposing it to a network**, the code side is now done: login failures back off
+exponentially (capped at ten minutes, never a permanent lockout), security headers are sent on
+every response, and CORS origins are configurable. What remains is yours: set a password
+(`scripts/set_password.py`), run something that terminates TLS — `deploy/Caddyfile` does it with
+automatic certificates — then set `COOKIE_SECURE=true` and `CORS_ORIGINS` to the real origin. The
+app warns at every startup until `COOKIE_SECURE` is true. See `deploy/README.md`.
 
 Backup and restore are done, with a round-trip test asserting balances and net worth survive a
 wipe, and reachable from `/data` rather than only by hand.

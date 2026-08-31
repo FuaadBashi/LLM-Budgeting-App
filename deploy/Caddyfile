@@ -1,0 +1,40 @@
+# Automatic HTTPS for Personal Finance OS.
+#
+# Caddy obtains and renews a Let's Encrypt certificate on its own, which is why
+# it is here rather than nginx: the certificate step is the one people skip, and
+# skipping it means COOKIE_SECURE=true cannot be set, which means the session
+# cookie travels in clear text.
+#
+#   1. Point a domain's A record at this machine.
+#   2. Replace money.example.com below.
+#   3. Set in backend/.env:
+#        COOKIE_SECURE=true
+#        CORS_ORIGINS=https://money.example.com
+#   4. caddy run --config deploy/Caddyfile
+#
+# Ports 80 and 443 must reach this host for the certificate challenge.
+
+money.example.com {
+	encode gzip
+
+	# The API. Everything under /api goes to uvicorn.
+	handle /api/* {
+		reverse_proxy localhost:8000
+	}
+
+	# Everything else is the Next.js app.
+	handle {
+		reverse_proxy localhost:3000
+	}
+
+	# Caddy sets HSTS itself once serving HTTPS; the app adds the rest.
+	header {
+		-Server
+	}
+
+	log {
+		# Requests to a personal finance app are themselves revealing, so the
+		# access log is off by default rather than kept somewhere forgotten.
+		output discard
+	}
+}

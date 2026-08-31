@@ -18,6 +18,7 @@ from app.api.insight_routes import router as insight_router
 from app.api.scenario_routes import router as scenario_router
 from app import scheduler
 from app.auth import require_session, session_secret_warning, startup_warning
+from app.config import settings
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -43,9 +44,31 @@ app = FastAPI(
     version="0.1.0",
 )
 
+@app.middleware("http")
+async def security_headers(request, call_next):
+    """Headers that cost nothing and close real holes.
+
+    HSTS is only sent when cookies are already HTTPS-only: asserting it over
+    plain HTTP would pin a browser to a scheme this deployment does not serve,
+    and locking the owner out of their own finances is a worse failure than the
+    one it prevents.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # The API returns JSON, never markup, so nothing legitimate needs loading.
+    response.headers.setdefault("Content-Security-Policy", "default-src 'none'")
+    if settings.cookie_secure:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=settings.allowed_origins,
     # Cookies must be allowed through, or the session never reaches the API.
     allow_credentials=True,
     allow_methods=["*"],

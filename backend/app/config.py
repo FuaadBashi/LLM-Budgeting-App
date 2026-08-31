@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     session_secret: str = ""
     #: Send the session cookie only over HTTPS. Leave false for localhost.
     cookie_secure: bool = False
+    #: Browser origins allowed to call the API, comma-separated. The default is
+    #: the local dev server; a deployment must set its real origin, because
+    #: cookies are only sent to origins on this list.
+    cors_origins: str = "http://localhost:3000"
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     #: Where scheduled backups are written. Relative paths resolve against the
     #: process working directory, which for the usual `uvicorn` invocation is
