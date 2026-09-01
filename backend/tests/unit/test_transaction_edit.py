@@ -12,17 +12,20 @@ refused here, loudly, rather than accepted and dropped.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from app.db import get_session
 from app.domain.disposable import account_balances, net_worth
 from app.domain.obligations import match_instances
 from app.main import app
-from app.models import AccountKind, FutureObligation, ObligationInstance
+from app.models import AccountKind, FutureObligation, ObligationInstance, Transaction
 from tests.conftest import make_account
 
 AUGUST = date(2026, 8, 15)
@@ -466,4 +469,172 @@ def test_a_refused_edit_does_not_mark_the_transaction_edited(client, accounts):
     txn = spend(client, accounts)
     client.patch(f"/api/transactions/{txn['id']}", json={"booking_date": "2026-08-16"})
 
+    assert client.get("/api/transactions").json()[0]["edited"] is False
+
+
+# --------------------------------------------------------------------------
+# The edit has to actually land, and a rejection has to actually be reported
+# --------------------------------------------------------------------------
+
+
+def test_an_edit_is_committed_rather_than_merely_flushed(
+    client, session, engine, accounts
+):
+    """Read the row back through a *different* session.
+
+    Every other test here reads through the same session the route wrote on, so
+    a handler that flushed instead of committing would satisfy all of them and
+    still lose the edit: `get_session` closes the session at the end of the
+    request, and closing rolls back. The symptom is a 200 carrying the new
+    description and a database that never took it.
+    """
+    txn = spend(client, accounts, description="Tesco")
+
+    r = client.patch(
+        f"/api/transactions/{txn['id']}", json={"description": "Tesco Metro"}
+    )
+    assert r.status_code == 200, r.text
+
+    observer = sessionmaker(bind=engine)()
+    try:
+        assert (
+            observer.execute(
+                select(Transaction.description).where(Transaction.id == uuid.UUID(txn["id"]))
+            ).scalar_one()
+            == "Tesco Metro"
+        )
+    finally:
+        observer.close()
+
+
+def test_a_database_rejection_is_reported_rather_than_swallowed(client, accounts):
+    """merchant is varchar(200) and the schema sets no length, so the database is
+    the only thing that refuses an over-long one.
+
+    The handler must turn that into a 4xx. Catching it, rolling back and
+    returning 200 would answer with the *rolled-back* row -- a response that
+    looks like success and reports the old value, which is the shape of bug a
+    user reads as "the save button does nothing sometimes".
+    """
+    txn = spend(client, accounts, merchant="TESCO")
+
+    r = client.patch(f"/api/transactions/{txn['id']}", json={"merchant": "X" * 300})
+
+    assert r.status_code == 422, r.text
+    after = client.get("/api/transactions").json()[0]
+    assert after["merchant"] == "TESCO"
+    assert after["edited"] is False
+
+
+# --------------------------------------------------------------------------
+# The core guarantee, stated once over every allowed edit
+# --------------------------------------------------------------------------
+
+
+def test_no_allowed_edit_moves_a_balance_or_net_worth(
+    client, session, accounts, categories
+):
+    """Every kind of edit the endpoint permits, against a snapshot of both.
+
+    Card-funded spending is in the sample because it is the case where budget
+    Spent and cash legitimately disagree (register item X2): if an edit were ever
+    going to reach for the money it would be there.
+    """
+    card = make_account(session, "Visa", AccountKind.LIABILITY, "-500")
+    session.commit()
+    cash_funded = spend(client, accounts, category=categories["groceries"])
+    card_funded = client.post(
+        "/api/transactions",
+        json={
+            "booking_date": "2026-08-15",
+            "description": "Card shop",
+            "postings": [
+                {"account_id": str(card.id), "amount_minor": -2_000},
+                {"account_id": str(accounts["groceries"].id), "amount_minor": 2_000},
+            ],
+        },
+    ).json()
+
+    balances_before = account_balances(session)
+    net_worth_before = net_worth(session, AUGUST)
+
+    edits = [
+        (cash_funded["id"], {"description": "Tesco -- weekly shop"}),
+        (cash_funded["id"], {"merchant": "Tesco"}),
+        (cash_funded["id"], {"merchant": None}),
+        (cash_funded["id"], {"category_id": str(categories["restaurants"].id)}),
+        (cash_funded["id"], {"category_id": None}),
+        (
+            card_funded["id"],
+            {"description": "Argos", "merchant": "ARGOS",
+             "category_id": str(categories["rent"].id)},
+        ),
+    ]
+    for transaction_id, payload in edits:
+        r = client.patch(f"/api/transactions/{transaction_id}", json=payload)
+        assert r.status_code == 200, (payload, r.text)
+        assert account_balances(session) == balances_before, payload
+        assert net_worth(session, AUGUST) == net_worth_before, payload
+
+
+def test_recategorising_a_partly_reimbursed_expense_takes_its_netting_with_it(
+    client, session, accounts, categories
+):
+    """The offset is scoped by the *original expense leg's* category, so moving
+    that leg has to move the netting too.
+
+    An implementation that captured the category when the reimbursement was
+    written, or that read it off the repayment's own legs, would leave £300 of
+    relief behind in Groceries -- the old budget going negative and the new one
+    carrying the whole £600.
+    """
+    claims = make_account(session, "Expense Claims", AccountKind.INCOME_SOURCE)
+    session.commit()
+    groceries = make_budget(client, "Groceries", categories["groceries"])
+    restaurants = make_budget(client, "Restaurants", categories["restaurants"])
+    original = spend(
+        client, accounts, amount_minor=60_000, category=categories["groceries"]
+    )
+    client.post(
+        "/api/transactions",
+        json={
+            "booking_date": "2026-08-15",
+            "description": "Employer repayment",
+            "reimburses_id": original["id"],
+            "postings": [
+                {"account_id": str(accounts["current"].id), "amount_minor": 30_000},
+                {"account_id": str(claims.id), "amount_minor": -30_000},
+            ],
+        },
+    )
+    assert (spent_minor(client, groceries), spent_minor(client, restaurants)) == (
+        30_000,
+        0,
+    )
+
+    r = client.patch(
+        f"/api/transactions/{original['id']}",
+        json={"category_id": str(categories["restaurants"].id)},
+    )
+    assert r.status_code == 200, r.text
+
+    assert (spent_minor(client, groceries), spent_minor(client, restaurants)) == (
+        0,
+        30_000,
+    )
+
+
+def test_the_edited_flag_is_false_on_create_even_when_a_budget_is_assessed(
+    client, accounts, categories
+):
+    """Creating a transaction while a budget exists runs W3, which voids the row
+    inside a savepoint and flushes to re-measure. That flush fires the mixin's
+    ``onupdate``. If the savepoint rollback did not put ``updated_at`` back,
+    every transaction posted against a budget would be born reporting itself as
+    having been edited."""
+    make_budget(client, "Groceries", categories["groceries"])
+
+    created = spend(client, accounts, category=categories["groceries"])
+
+    assert created["edited"] is False
     assert client.get("/api/transactions").json()[0]["edited"] is False
