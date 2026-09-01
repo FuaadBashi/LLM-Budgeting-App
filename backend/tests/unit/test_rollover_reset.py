@@ -363,3 +363,42 @@ def test_the_write_off_does_not_reach_back_past_its_own_boundary(session, accoun
 
     assert got[8].remaining == Decimal("-400"), "August keeps what it actually did"
     assert got[7].rollover_in == Decimal("0")
+
+
+def test_the_written_off_carry_is_reported_not_swallowed(session, accounts):
+    """The one operation whose whole purpose is forgiveness must say how much.
+
+    `carry()` reports what a policy forgives on EXIT. A reset forgives on ENTRY,
+    which went through a different code path and was reported nowhere — so the
+    carry simply vanished with no figure naming it.
+    """
+    b = overspent_july_and_august(session, accounts)
+    revise(session, b, SEPTEMBER, reset=True)
+    got = periods(session, b)
+
+    # August ended at -400, so that is what September's reset wrote off.
+    assert got[9].rollover_forgiven == Decimal("-400")
+    assert got[9].rollover_in == Decimal("0")
+    # And it is reported once, not again in the periods that follow.
+    assert got[10].rollover_forgiven == Decimal("0")
+
+
+def test_a_mid_period_revision_is_refused_rather_than_deferred(client, session, accounts):
+    """Accepted-and-ignored is the failure this codebase refuses everywhere."""
+    b = overspent_july_and_august(session, accounts)
+    r = client.patch(
+        f"/api/budgets/{b.id}",
+        json={"amount_minor": 50000, "effective_from": "2026-09-15", "rollover_reset": True},
+    )
+    assert r.status_code == 422
+    assert "inside a period" in r.json()["detail"]
+    assert "2026-09-01" in r.json()["detail"], "it must name the boundary to use"
+
+
+def test_a_period_boundary_is_still_accepted(client, session, accounts):
+    b = overspent_july_and_august(session, accounts)
+    r = client.patch(
+        f"/api/budgets/{b.id}",
+        json={"amount_minor": 50000, "effective_from": "2026-09-01", "rollover_reset": True},
+    )
+    assert r.status_code == 200

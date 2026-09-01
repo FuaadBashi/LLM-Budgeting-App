@@ -183,6 +183,23 @@ def revise_budget(
     ).start
     effective_from = max(effective_from, budget.start_date)
 
+    # `revision_for` resolves against a period's START, so a revision dated
+    # mid-period does not govern that period at all -- it first takes effect in
+    # the next one. Accepting it with 200 and silently deferring is the
+    # accepted-and-ignored failure this codebase refuses everywhere else: the
+    # user asks to write off September's carry, is told it worked, and finds
+    # September untouched.
+    boundary = period_for(budget.period, effective_from, budget.anchor_date).start
+    if effective_from != boundary and effective_from != budget.start_date:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{effective_from} is inside a period, not the start of one. A "
+                f"revision takes effect at a period boundary -- use {boundary} "
+                "to change this period, or the next boundary to change the next."
+            ),
+        )
+
     previous = _revision_in_force(budget, effective_from)
     existing = next(
         (r for r in budget.revisions if r.effective_from == effective_from), None

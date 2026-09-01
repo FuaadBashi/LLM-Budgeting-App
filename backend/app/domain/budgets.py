@@ -236,7 +236,14 @@ def chain(
         # rollover_forgiven is reported rather than swallowed: under positive_only
         # an overspend really is written off, but silently doing so makes the
         # policy look like it manufactures budget.
-        results[-1] = _with_forgiven(results[-1], forgiven)
+        #
+        # Both directions land in this one field. `carry()` reports what a policy
+        # forgives on EXIT; a reset forgives on ENTRY. They must be summed here
+        # rather than assigned separately, because whichever ran second would
+        # otherwise overwrite the other -- and the entry-side write-off is the
+        # one that would be lost, leaving the single operation whose entire
+        # purpose is forgiveness as the only one silent about it.
+        results[-1] = _with_forgiven(results[-1], forgiven + forgiven_on_entry)
 
         p = next_period(budget.period, p, budget.anchor_date)
 
