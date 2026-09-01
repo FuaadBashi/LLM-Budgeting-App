@@ -21,6 +21,14 @@ const PERIODS = [
   { value: "annual", label: "Annual" },
 ];
 
+//: A reset is a one-shot write-off at this period's boundary, not a switch that
+//: stays on. Wording says what happens and when, because "reset" alone tells the
+//: user neither.
+const RESET = [
+  { value: "keep", label: "Keep what carried in" },
+  { value: "writeoff", label: "Write it off from this period on" },
+];
+
 const ROLLOVER = [
   { value: "none", label: "None — unspent expires" },
   { value: "positive_only", label: "Positive only — surplus carries, overspend does not" },
@@ -237,6 +245,17 @@ export function BudgetManager({
                             value: b.rollover_policy,
                             options: ROLLOVER,
                           },
+                          // An action, not a stored setting. A reset forgives the
+                          // carry once, at this period's boundary, so it defaults
+                          // to "keep" every time the editor opens rather than
+                          // showing a toggle that looks like it is still on.
+                          {
+                            name: "rollover_reset",
+                            label: "Carried-in balance",
+                            kind: "select" as const,
+                            value: "keep",
+                            options: RESET,
+                          },
                         ]),
                   ]}
                   onSave={(v) =>
@@ -244,6 +263,13 @@ export function BudgetManager({
                       amount_minor: parseMajorToMinor(v.amount),
                       ...(v.rollover_policy
                         ? { rollover_policy: v.rollover_policy }
+                        : {}),
+                      // Sent only when the user actually asked for it. Omitting
+                      // it means "leave it alone"; sending false would clear a
+                      // reset made earlier, which was the bug behind this field
+                      // existing in the UI at all.
+                      ...(v.rollover_reset === "writeoff"
+                        ? { rollover_reset: true }
                         : {}),
                     })
                   }
