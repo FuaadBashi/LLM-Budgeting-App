@@ -13,6 +13,7 @@ import {
   type ImportBatch,
   type ImportCandidate,
 } from "@/lib/api";
+import { TriageDeck } from "@/components/TriageDeck";
 import { formatMinor } from "@/lib/money";
 
 /** Accounts a statement can be imported into — where money actually sits. */
@@ -44,6 +45,7 @@ export function ImportInbox({
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<ImportBatch | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
+  const [triage, setTriage] = useState(false);
 
   const statementAccounts = accounts.filter((a) => IMPORTABLE.has(a.kind));
   const expense = accounts.filter((a) => a.kind === "expense");
@@ -248,13 +250,44 @@ export function ImportInbox({
       <section>
         <div className="mb-3 flex items-baseline justify-between gap-3">
           <h2 className="section-label">Needs a decision</h2>
-          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-            {pending.length} pending · {duplicates.length}{" "}
-            {duplicates.length === 1 ? "flagged as a duplicate" : "flagged as duplicates"}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {pending.length} pending · {duplicates.length}{" "}
+              {duplicates.length === 1 ? "flagged as a duplicate" : "flagged as duplicates"}
+            </span>
+            {!triage && pending.length + duplicates.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setTriage(true)}
+                className="rounded-full px-3 py-1 text-xs"
+                style={{
+                  color: "var(--text-secondary)",
+                  boxShadow: "inset 0 0 0 1px var(--hairline-strong)",
+                }}
+              >
+                Triage one by one
+              </button>
+            )}
+          </div>
         </div>
 
-        {pending.length === 0 && duplicates.length === 0 ? (
+        {triage ? (
+          <TriageDeck
+            candidates={[...pending, ...duplicates]}
+            accounts={accounts}
+            categories={categories}
+            onAccept={(row, counterAccountId, categoryId) =>
+              act(row.id, () =>
+                acceptCandidate(row.id, {
+                  counter_account_id: counterAccountId,
+                  category_id: categoryId,
+                }),
+              )
+            }
+            onDecline={(row) => act(row.id, () => rejectCandidate(row.id))}
+            onExit={() => setTriage(false)}
+          />
+        ) : pending.length === 0 && duplicates.length === 0 ? (
           <div className="card p-5 text-sm" style={{ color: "var(--text-muted)" }}>
             Nothing waiting. Imported rows appear here until you accept or decline them.
           </div>
