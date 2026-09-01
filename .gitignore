@@ -24,3 +24,8 @@ npm-debug.log*
 backups/
 backend/backups/
 *.json.tmp
+
+# Runtime logs from "Start Finance OS.command". They sit in the repo directory
+# because that is where the launcher runs; they are not part of it.
+logs/
+*.log

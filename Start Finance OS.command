@@ -36,19 +36,21 @@ if ! pg_isready -q 2>/dev/null; then
   exit 1
 fi
 
+mkdir -p "$ROOT/logs"
+
 # Anything already holding the ports is from a previous run, not another app.
 lsof -ti:8000 | xargs -r kill -9 2>/dev/null
 lsof -ti:3000 | xargs -r kill -9 2>/dev/null
 
 say "Starting the API…"
 ( cd "$ROOT/backend" && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 ) \
-  > "$ROOT/backend/api.log" 2>&1 &
+  > "$ROOT/logs/api.log" 2>&1 &
 API_PID=$!
 
 say "Starting the app…"
 # -H 0.0.0.0 is what makes it reachable from a phone on the same network.
 ( cd "$ROOT/frontend" && npx next dev -H 0.0.0.0 -p 3000 ) \
-  > "$ROOT/frontend/web.log" 2>&1 &
+  > "$ROOT/logs/web.log" 2>&1 &
 WEB_PID=$!
 
 # Wait for a real answer rather than sleeping a guessed number of seconds.
@@ -63,7 +65,7 @@ say "Running."
 echo "  This Mac:  http://localhost:3000"
 [[ -n "$LAN_IP" ]] && echo "  Your phone (same Wi-Fi):  http://$LAN_IP:3000"
 echo
-echo "  Logs: backend/api.log, frontend/web.log"
+echo "  Logs: logs/api.log, logs/web.log"
 echo "  Close this window to stop."
 echo
 
