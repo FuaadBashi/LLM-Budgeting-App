@@ -9,12 +9,13 @@ rounding error waiting to be summed.
 from __future__ import annotations
 
 from datetime import date
+from decimal import ROUND_FLOOR
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.schemas import to_minor
+from app.api.schemas import MINOR_UNITS, to_minor
 from app.db import get_session
 from app.domain import allocation, analytics
 from app.domain.clock import today as clock_today
@@ -51,18 +52,52 @@ class AllocationOut(BaseModel):
     unallocated_minor: int
 
 
-def _bucket_out(b: allocation.Bucket) -> BucketOut:
+def _target_minors(
+    report: allocation.AllocationReport, income_minor: int
+) -> dict[str, int | None]:
+    """The three targets in pence, summing to income exactly.
+
+    ``allocation`` keeps targets unrounded precisely because 0.50 + 0.30 + 0.20
+    is exactly 1, so the three sum to income. Rounding each one independently
+    here would throw that away -- an income of £2,500.01 renders as three targets
+    summing to £2,500.00, a penny the reader cannot account for. Largest
+    remainder places the odd penny rather than losing it.
+    """
+    targeted = [report.needs, report.wants, report.savings]
+    if any(b.target_amount is None for b in targeted):
+        return {b.key: None for b in targeted}
+
+    exact = [b.target_amount * MINOR_UNITS for b in targeted]
+    minors = [int(e.to_integral_value(rounding=ROUND_FLOOR)) for e in exact]
+    shortfall = income_minor - sum(minors)
+    if shortfall:
+        step = 1 if shortfall > 0 else -1
+        order = sorted(
+            range(len(exact)),
+            key=lambda i: exact[i] - minors[i],
+            reverse=shortfall > 0,
+        )
+        for n in range(abs(shortfall)):
+            minors[order[n % len(order)]] += step
+    return {b.key: m for b, m in zip(targeted, minors)}
+
+
+def _bucket_out(
+    b: allocation.Bucket, amount_minor: int, target_amount_minor: int | None
+) -> BucketOut:
+    # Variance is derived from the rounded pair rather than rounded separately,
+    # so amount = target + variance still holds in the units the reader is shown.
     return BucketOut(
         key=b.key,
         label=b.label,
-        amount_minor=to_minor(b.amount),
+        amount_minor=amount_minor,
         share=float(b.share) if b.share is not None else None,
         target_share=float(b.target_share) if b.target_share is not None else None,
-        target_amount_minor=(
-            to_minor(b.target_amount) if b.target_amount is not None else None
-        ),
+        target_amount_minor=target_amount_minor,
         variance_amount_minor=(
-            to_minor(b.variance_amount) if b.variance_amount is not None else None
+            amount_minor - target_amount_minor
+            if target_amount_minor is not None
+            else None
         ),
         variance_share=(
             float(b.variance_share) if b.variance_share is not None else None
@@ -78,24 +113,49 @@ def allocation_report(
 ) -> AllocationOut:
     """Needs, wants and savings against the 50/30/20 targets.
 
-    Defaults to the current calendar month, resolved through the clock rather
-    than the server's date.
+    Each bound defaults to the current calendar month independently, as
+    ``export_routes._period`` does. Defaulting only when *both* are absent
+    discards a bound the caller supplied: ``?start=2026-08-20`` would answer
+    about the whole of the current month instead, and echo dates the caller
+    never asked for. The month comes from the clock, never the server's date.
     """
     today = clock_today(session)
-    if start is None or end is None:
-        start, end = analytics.month_bounds(today.year, today.month)
+    month_start, month_end = analytics.month_bounds(today.year, today.month)
+    start = start or month_start
+    end = end or month_end
 
     report = allocation.summarise(session, start, end)
+
+    # Round each figure the report *owns* exactly once, then build every total
+    # from those rounded parts. Rounding an aggregate separately from its terms
+    # is how a report stops adding up: postings are NUMERIC(19,4), so a restored
+    # or imported 4dp amount makes `to_minor(a) + to_minor(b)` and
+    # `to_minor(a + b)` differ by a penny, and the reader's own addition then
+    # disagrees with the totals printed beside it.
+    income_minor = to_minor(report.income)
+    needs_minor = to_minor(report.needs.amount)
+    wants_minor = to_minor(report.wants.amount)
+    uncategorised_minor = to_minor(report.uncategorised.amount)
+    set_aside_minor = to_minor(report.set_aside)
+    debt_principal_minor = to_minor(report.debt_principal)
+    savings_minor = set_aside_minor + debt_principal_minor
+    total_outflow_minor = (
+        needs_minor + wants_minor + savings_minor + uncategorised_minor
+    )
+
+    targets = _target_minors(report, income_minor)
     return AllocationOut(
         start=report.start,
         end=report.end,
-        income_minor=to_minor(report.income),
-        needs=_bucket_out(report.needs),
-        wants=_bucket_out(report.wants),
-        savings=_bucket_out(report.savings),
-        uncategorised=_bucket_out(report.uncategorised),
-        set_aside_minor=to_minor(report.set_aside),
-        debt_principal_minor=to_minor(report.debt_principal),
-        total_outflow_minor=to_minor(report.total_outflow),
-        unallocated_minor=to_minor(report.unallocated),
+        income_minor=income_minor,
+        needs=_bucket_out(report.needs, needs_minor, targets["needs"]),
+        wants=_bucket_out(report.wants, wants_minor, targets["wants"]),
+        savings=_bucket_out(report.savings, savings_minor, targets["savings"]),
+        uncategorised=_bucket_out(
+            report.uncategorised, uncategorised_minor, None
+        ),
+        set_aside_minor=set_aside_minor,
+        debt_principal_minor=debt_principal_minor,
+        total_outflow_minor=total_outflow_minor,
+        unallocated_minor=income_minor - total_outflow_minor,
     )

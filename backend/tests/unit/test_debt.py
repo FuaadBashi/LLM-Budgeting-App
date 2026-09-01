@@ -291,6 +291,43 @@ def test_exactly_covering_the_minimums_is_feasible(session, three_debts):
     assert plan.opening_extra == Decimal("0")
 
 
+def test_a_debt_owing_less_than_its_minimum_does_not_make_the_plan_infeasible(
+    session,
+):
+    """The gate must not be stricter than the loop it guards.
+
+    A card with £10 left on it and a £50 stated minimum wants £10, not £50 --
+    no lender asks for more than the balance, and the projection has always
+    paid ``min(minimum, balance)``. Summing the *stated* minimums refused to
+    plan for a debt one payment from gone: £20 a month against £10 owed was
+    reported as "£30.00 short", which is a refusal to answer a question whose
+    answer is "next month".
+    """
+    make_debt(session, "Nearly done", "10", "0", "50")
+    plan = debt.plan(session, Strategy.SNOWBALL, Decimal("20"), AS_OF)
+
+    assert plan.feasible is True
+    assert plan.reason == ""
+    assert plan.shortfall == Decimal("0")
+    assert plan.minimum_payments_total == Decimal("10")
+    assert plan.months_to_debt_free == 1
+    assert plan.months[0].paid == Decimal("10")
+
+
+def test_opening_extra_is_what_month_one_actually_frees(session):
+    """``opening_extra`` is read as "what goes at the target this month".
+
+    With a debt owing less than its minimum the two came apart: the field said
+    £150 while the schedule threw £190, because the field subtracted a £50
+    minimum the £10 debt was never going to be charged.
+    """
+    make_debt(session, "Nearly done", "10", "0", "50")
+    make_debt(session, "Big", "5000", "0", "100")
+    plan = debt.plan(session, Strategy.SNOWBALL, Decimal("300"), AS_OF)
+
+    assert plan.opening_extra == plan.months[0].extra == Decimal("190")
+
+
 def test_a_minimum_that_never_outruns_the_interest_reports_no_payoff_date(session):
     """£1 a month against a £1,000 balance at 30%: the balance grows.
 
@@ -307,6 +344,69 @@ def test_a_minimum_that_never_outruns_the_interest_reports_no_payoff_date(sessio
     assert plan.debts[0].months_to_clear is None
     assert plan.debts[0].cleared_on is None
     assert "still owed" in plan.reason
+
+
+@pytest.fixture
+def one_strategy_never_finishes(session) -> None:
+    """Both plans affordable; only avalanche ever ends.
+
+    £600 a month, no minimums. Snowball goes at the £4,000 cheap debt first and
+    leaves the £9,000 card compounding at 100% APR (5.946% a month); after
+    seven months it is past £13,400, where the interest alone beats the £600
+    and the balance grows for ever. Avalanche goes at the card first and clears
+    everything in 46 months.
+    """
+    make_debt(session, "Runaway card", "9000", "1.00", "0")
+    make_debt(session, "Cheap loan", "4000", "0", "0")
+
+
+def test_the_fixture_really_does_split_on_termination(
+    session, one_strategy_never_finishes
+):
+    """A guard on the fixture: if both plans finished, the test below would
+    pass while asserting nothing about the incomparable case."""
+    result = debt.compare(session, Decimal("600"), AS_OF)
+    assert result.snowball.months_to_debt_free is None
+    assert result.avalanche.months_to_debt_free == 46
+
+
+def test_an_unfinished_plan_is_not_subtracted_from_a_finished_one(
+    session, one_strategy_never_finishes
+):
+    """Feasible is not comparable, and the difference is not a saving.
+
+    Snowball's total here is 600 months of runaway compounding -- a truncated
+    horizon, not the cost of a plan. Subtracting it reported a saving of
+    £2,400,488,434,609,613,674.22, which is not a number anyone can act on and
+    which arrives with ``feasible: true`` next to it. ``months_saved`` already
+    refused to answer; interest had to as well.
+    """
+    result = debt.compare(session, Decimal("600"), AS_OF)
+
+    assert result.feasible is True
+    assert result.comparable is False
+    assert result.interest_saved_by_avalanche == Decimal("0")
+    assert result.months_saved_by_avalanche is None
+    assert "still owed" in result.reason
+
+
+def test_comparable_is_true_when_both_plans_finish(session, three_debts):
+    """The guard must not swallow the case it exists to let through."""
+    result = debt.compare(session, SURPLUS, AS_OF)
+    assert result.comparable is True
+    assert result.interest_saved_by_avalanche == Decimal("45.69")
+
+
+def test_the_endpoint_flags_an_incomparable_pair(client, one_strategy_never_finishes):
+    body = client.get(
+        "/api/debt/plan", params={"monthly_surplus_minor": 60_000, "on": "2026-09-01"}
+    ).json()
+    assert body["feasible"] is True
+    assert body["comparable"] is False
+    assert body["interest_saved_by_avalanche_minor"] == 0
+    assert body["months_saved_by_avalanche"] is None
+    assert body["avalanche"]["months_to_debt_free"] == 46
+    assert body["snowball"]["months_to_debt_free"] is None
 
 
 # --------------------------------------------------------------------------

@@ -183,6 +183,10 @@ def chain(
     p = period_for(budget.period, budget.start_date, budget.anchor_date)
     rollover_in = ZERO
     results: list[BudgetPeriodResult] = []
+    # Which revision's reset has already been honoured. A reset is a one-shot
+    # write-off at the boundary its revision begins, not a standing setting --
+    # see the reset branch below.
+    reset_honoured_for = None
 
     while p.start <= target.start:
         if budget.end_date and p.start > budget.end_date:
@@ -196,8 +200,23 @@ def chain(
             p = next_period(budget.period, p, budget.anchor_date)
             continue
 
-        if rev.rollover_reset:
+        # A reset forgives the carry ONCE, at the boundary where its revision
+        # takes effect. Re-firing it for every period the revision governs would
+        # silently convert a FULL or POSITIVE_ONLY budget into a NONE budget for
+        # the rest of its life: write off 400 in September and every surplus
+        # earned from October onward vanishes, with nothing on screen saying so.
+        #
+        # Permanent suspension is already expressible -- it is rollover_policy =
+        # NONE, chosen deliberately and visible in the budget's own settings. Two
+        # ways to say the same thing, one of them a sticky side effect of a
+        # one-time action, is the kind of thing this codebase treats as a bug
+        # rather than a feature.
+        if rev.rollover_reset and rev is not reset_honoured_for:
+            forgiven_on_entry = rollover_in
             rollover_in = ZERO
+            reset_honoured_for = rev
+        else:
+            forgiven_on_entry = ZERO
 
         # The first period stays a full grid cell so charts and month-over-month
         # comparisons line up; only the *spend window* is clipped to the budget's

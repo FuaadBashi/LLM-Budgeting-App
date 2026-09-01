@@ -41,6 +41,20 @@ def _latest_revision(budget: Budget) -> BudgetRevision | None:
     return max(budget.revisions, key=lambda r: r.effective_from)
 
 
+def _revision_in_force(budget: Budget, when: date) -> BudgetRevision | None:
+    """The plan a new revision at ``when`` inherits from.
+
+    The latest revision is the wrong answer whenever one exists at a later date:
+    a backdated correction, or an ordinary edit made while a change is already
+    scheduled ahead, would inherit settings that were never in force at ``when``
+    and quietly backdate them. Matches ``budgets.revision_for``.
+    """
+    eligible = [r for r in budget.revisions if r.effective_from <= when]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda r: r.effective_from)
+
+
 def _budget_out(budget: Budget) -> BudgetOut:
     rev = _latest_revision(budget)
     return BudgetOut(
@@ -169,7 +183,7 @@ def revise_budget(
     ).start
     effective_from = max(effective_from, budget.start_date)
 
-    previous = _latest_revision(budget)
+    previous = _revision_in_force(budget, effective_from)
     existing = next(
         (r for r in budget.revisions if r.effective_from == effective_from), None
     )

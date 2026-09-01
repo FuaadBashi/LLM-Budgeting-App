@@ -70,11 +70,17 @@ class DebtPlanOut(BaseModel):
     monthly_surplus_minor: int
     total_owed_minor: int
     feasible: bool
+    #: Whether the two totals can be set against each other. Feasible is not
+    #: enough: both plans can cover their minimums while only one ever
+    #: finishes, and the other's total is then a truncated horizon rather than
+    #: the cost of a plan. False means read ``reason``, not the difference.
+    comparable: bool
     reason: str
     snowball: StrategyPlanOut
     avalanche: StrategyPlanOut
     #: What the psychologically easier order costs. The number the trade-off
-    #: turns on, so it is reported rather than left to be subtracted.
+    #: turns on, so it is reported rather than left to be subtracted. Zero and
+    #: meaningless when ``comparable`` is false.
     interest_saved_by_avalanche_minor: int
     #: Signed, and may be zero or negative: avalanche is the cheapest ordering,
     #: not always the shortest. None when either plan never finishes.
@@ -138,6 +144,7 @@ def debt_plan(
         monthly_surplus_minor=to_minor(result.monthly_surplus),
         total_owed_minor=to_minor(result.total_owed),
         feasible=result.feasible,
+        comparable=result.comparable,
         reason=result.reason,
         snowball=_plan_out(result.snowball),
         avalanche=_plan_out(result.avalanche),

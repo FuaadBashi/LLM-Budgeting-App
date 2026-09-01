@@ -7,17 +7,19 @@ them at once.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
-from app.api import allocation_routes
 from app.db import get_session
 from app.domain import allocation, analytics
-from app.models import Category, CategoryNature
+from app.domain.clock import today as clock_today
+from app.domain.ledger_scope import posted_transaction_ids
+from app.main import app
+from app.models import Account, AccountKind, Category, CategoryNature, Posting
 from tests.conftest import post
 
 START = date(2026, 8, 1)
@@ -280,12 +282,17 @@ def test_the_three_targets_sum_to_income(session, month):
 
 @pytest.fixture
 def client(session):
-    """The router on its own app -- it is not registered in main.py."""
-    api = FastAPI()
-    api.include_router(allocation_routes.router, prefix="/api")
-    api.dependency_overrides[get_session] = lambda: session
-    with TestClient(api) as c:
+    """The real app, not a router mounted on a throwaway one.
+
+    A private ``FastAPI()`` per test file proves the handler works and says
+    nothing about whether anyone can reach it: the router, its ``/api`` prefix
+    and its ``require_session`` guard are all wired in ``main.py``, and a test
+    that rebuilds that wiring cannot notice it being wrong.
+    """
+    app.dependency_overrides[get_session] = lambda: session
+    with TestClient(app) as c:
         yield c
+    app.dependency_overrides.clear()
 
 
 def test_the_route_returns_money_as_integer_minor_units(client, month):
@@ -332,3 +339,256 @@ def test_the_route_sends_null_shares_rather_than_zero_without_income(client, ses
     body = client.get("/api/analytics/allocation?start=2026-08-01&end=2026-08-31").json()
     assert body["needs"]["share"] is None
     assert body["uncategorised"]["amount_minor"] == 4000
+
+
+# --------------------------------------------------------------------------
+# Reconciliation against the ledger, not against the report's own formula
+# --------------------------------------------------------------------------
+
+
+def _liquid_movement(session, start: date, end: date) -> Decimal:
+    """What the current and cash accounts actually moved by over the window."""
+    return session.scalar(
+        select(func.coalesce(func.sum(Posting.amount), Decimal("0")))
+        .join(Account, Posting.account_id == Account.id)
+        .where(Posting.transaction_id.in_(posted_transaction_ids(start=start, end=end)))
+        .where(Account.kind.in_([AccountKind.CURRENT, AccountKind.CASH]))
+    )
+
+
+def test_unallocated_equals_what_the_liquid_accounts_actually_moved_by(
+    session, accounts, categories
+):
+    """The reconciliation that cannot be satisfied by restating the code.
+
+    ``total_outflow == needs + wants + savings + uncategorised`` is how
+    ``summarise`` builds the figure, so asserting it proves nothing. Every
+    posting lands in exactly one of income, the three spending buckets,
+    set-aside, principal or a liquid account, and the legs sum to zero -- so
+    ``income - total_outflow`` must equal the liquid movement. A pound lost
+    between the buckets, or counted in two of them, breaks this and only this.
+
+    One month with a split transaction, a savings transfer, a refund, an
+    uncategorised expense, a card-funded purchase and a split loan payment.
+    """
+    post(session, date(2026, 8, 1), "Salary",
+         [(accounts["current"], "1234.56"), (accounts["salary"], "-1234.56")])
+    post(session, date(2026, 8, 4), "Big shop",           # one shop, two natures
+         [(accounts["current"], "-90.00"),
+          (accounts["groceries"], "60.00", categories["rent"]),
+          (accounts["groceries"], "30.00", categories["groceries"])])
+    post(session, date(2026, 8, 5), "To savings",
+         [(accounts["current"], "-200.00"), (accounts["savings"], "200.00")])
+    post(session, date(2026, 8, 7), "Untagged",
+         [(accounts["current"], "-11.11"), (accounts["groceries"], "11.11")])
+    post(session, date(2026, 8, 9), "Tesco refund",       # negative expense
+         [(accounts["current"], "12.34"),
+          (accounts["groceries"], "-12.34", categories["groceries"])])
+    post(session, date(2026, 8, 11), "On the card",       # borrowing, no cash
+         [(accounts["loan"], "-25.00"),
+          (accounts["groceries"], "25.00", categories["groceries"])])
+    post(session, date(2026, 8, 20), "Loan",
+         [(accounts["current"], "-105.00"),
+          (accounts["loan"], "100.00"),
+          (accounts["interest"], "5.00", categories["rent"])])
+
+    report = allocation.summarise(session, START, END)
+    assert report.unallocated == _liquid_movement(session, START, END)
+    # And the same month still partitions expense spend exactly.
+    assert report.needs.amount + report.wants.amount + report.uncategorised.amount == (
+        analytics.summarise(session, START, END).expense
+    )
+
+
+def test_every_account_kind_reaches_exactly_one_part_of_the_report(session):
+    """The reconciliation above holds only while the seven kinds are covered.
+
+    A new ``AccountKind`` would leave postings in no bucket and the identity
+    would start failing for reasons nobody could locate. Fail here instead.
+    """
+    assert set(AccountKind) == {
+        AccountKind.CURRENT, AccountKind.CASH,          # unallocated
+        AccountKind.SAVINGS, AccountKind.INVESTMENT,    # set_aside
+        AccountKind.LIABILITY,                          # debt_principal
+        AccountKind.INCOME_SOURCE,                      # income
+        AccountKind.EXPENSE,                            # needs/wants/uncategorised
+    }
+
+
+def test_a_refund_reduces_the_bucket_it_came_out_of(session, accounts, categories):
+    """A negative expense leg is a refund; it must not land in the other bucket."""
+    post(session, date(2026, 8, 2), "Tesco",
+         [(accounts["current"], "-50"),
+          (accounts["groceries"], "50", categories["groceries"])])
+    post(session, date(2026, 8, 3), "Rent",
+         [(accounts["current"], "-500"),
+          (accounts["groceries"], "500", categories["rent"])])
+    post(session, date(2026, 8, 9), "Tesco refund",
+         [(accounts["current"], "20"),
+          (accounts["groceries"], "-20", categories["groceries"])])
+
+    report = allocation.summarise(session, START, END)
+    assert report.wants.amount == Decimal("30")     # 50 less the 20 refunded
+    assert report.needs.amount == Decimal("500")    # untouched
+
+
+def test_savings_follows_analytics_when_the_scenario_changes(session, accounts):
+    """A withdrawal has to move the figure, or the reuse is nominal only."""
+    post(session, date(2026, 8, 1), "Salary",
+         [(accounts["current"], "1000"), (accounts["salary"], "-1000")])
+    post(session, date(2026, 8, 3), "To savings",
+         [(accounts["current"], "-100"), (accounts["savings"], "100")])
+    post(session, date(2026, 8, 4), "Out of the ISA",
+         [(accounts["investment"], "-40"), (accounts["current"], "40")])
+
+    report = allocation.summarise(session, START, END)
+    assert report.set_aside == analytics.summarise(session, START, END).saved
+    assert report.set_aside == Decimal("60")
+    assert report.savings.amount == Decimal("60")
+
+
+# --------------------------------------------------------------------------
+# No income: the same argument that makes shares None makes targets None
+# --------------------------------------------------------------------------
+
+
+def test_no_income_means_no_target_amount_rather_than_a_zero_one(
+    session, accounts, categories
+):
+    """"£40 over a £0 target" is the amount-shaped version of "0% to needs".
+
+    The percentage the rule states is still true with no income; the amount it
+    implies is not, and neither is any variance from it.
+    """
+    post(session, date(2026, 8, 5), "Tesco",
+         [(accounts["current"], "-40"),
+          (accounts["groceries"], "40", categories["groceries"])])
+
+    report = allocation.summarise(session, START, END)
+    assert report.income == Decimal("0")
+    for bucket in (report.needs, report.wants, report.savings):
+        assert bucket.target_share is not None      # 50/30/20 is still the rule
+        assert bucket.target_amount is None
+        assert bucket.variance_amount is None
+        assert bucket.variance_share is None
+
+
+def test_the_route_sends_null_targets_rather_than_zero_without_income(
+    client, session, accounts, categories
+):
+    post(session, date(2026, 8, 5), "Tesco",
+         [(accounts["current"], "-40"),
+          (accounts["groceries"], "40", categories["groceries"])])
+    body = client.get(
+        "/api/analytics/allocation?start=2026-08-01&end=2026-08-31"
+    ).json()
+    assert body["needs"]["target_share"] == 0.5
+    assert body["needs"]["target_amount_minor"] is None
+    assert body["needs"]["variance_amount_minor"] is None
+
+
+# --------------------------------------------------------------------------
+# The minor-unit boundary
+# --------------------------------------------------------------------------
+
+
+def test_the_targets_sum_to_income_in_minor_units_too(client, session, accounts):
+    """Income of £2,500.01: rounding each target alone loses the odd penny."""
+    post(session, date(2026, 8, 1), "Salary",
+         [(accounts["current"], "2500.01"), (accounts["salary"], "-2500.01")])
+    body = client.get(
+        "/api/analytics/allocation?start=2026-08-01&end=2026-08-31"
+    ).json()
+
+    assert body["income_minor"] == 250001
+    assert sum(
+        body[key]["target_amount_minor"] for key in ("needs", "wants", "savings")
+    ) == 250001
+
+
+def test_amount_equals_target_plus_variance_in_minor_units(client, session, accounts):
+    post(session, date(2026, 8, 1), "Salary",
+         [(accounts["current"], "2500.01"), (accounts["salary"], "-2500.01")])
+    body = client.get(
+        "/api/analytics/allocation?start=2026-08-01&end=2026-08-31"
+    ).json()
+    for key in ("needs", "wants", "savings"):
+        bucket = body[key]
+        assert bucket["amount_minor"] == (
+            bucket["target_amount_minor"] + bucket["variance_amount_minor"]
+        )
+
+
+def test_the_route_reconciles_when_amounts_carry_sub_penny_precision(
+    client, session, accounts, categories
+):
+    """Postings are NUMERIC(19,4). Restore and CSV import can both land 4dp.
+
+    ``to_minor(a) + to_minor(b)`` and ``to_minor(a + b)`` then differ, so a
+    total rounded independently of its terms stops matching the terms printed
+    beside it -- a report that does not add up on screen.
+    """
+    post(session, date(2026, 8, 4), "Split shop",
+         [(accounts["current"], "-30.010"),
+          (accounts["groceries"], "10.005", categories["rent"]),
+          (accounts["groceries"], "20.005", categories["groceries"])])
+
+    body = client.get(
+        "/api/analytics/allocation?start=2026-08-01&end=2026-08-31"
+    ).json()
+    assert body["total_outflow_minor"] == sum(
+        body[key]["amount_minor"]
+        for key in ("needs", "wants", "savings", "uncategorised")
+    )
+    assert body["savings"]["amount_minor"] == (
+        body["set_aside_minor"] + body["debt_principal_minor"]
+    )
+    assert body["unallocated_minor"] == (
+        body["income_minor"] - body["total_outflow_minor"]
+    )
+
+
+# --------------------------------------------------------------------------
+# The window
+# --------------------------------------------------------------------------
+
+
+def test_the_default_window_is_the_clock_s_month_not_merely_a_valid_range(
+    client, session, accounts, categories
+):
+    """``start < end`` is true of every month, so it pins nothing."""
+    today = clock_today(session)
+    first = today.replace(day=1)
+    post(session, today, "This month",
+         [(accounts["current"], "-40"),
+          (accounts["groceries"], "40", categories["groceries"])])
+    post(session, first - timedelta(days=1), "Last month",
+         [(accounts["current"], "-70"),
+          (accounts["groceries"], "70", categories["groceries"])])
+
+    body = client.get("/api/analytics/allocation").json()
+    assert body["start"] == first.isoformat()
+    assert body["wants"]["amount_minor"] == 4000
+
+
+def test_a_bound_the_caller_supplied_is_never_discarded(client, session, accounts,
+                                                        categories):
+    """Defaulting only when *both* are absent answers a question nobody asked."""
+    first = clock_today(session).replace(day=1)
+    cutoff = first + timedelta(days=2)
+    post(session, first, "Before the cutoff",
+         [(accounts["current"], "-15"),
+          (accounts["groceries"], "15", categories["groceries"])])
+    post(session, first + timedelta(days=5), "After it",
+         [(accounts["current"], "-25"),
+          (accounts["groceries"], "25", categories["groceries"])])
+
+    from_start = client.get(
+        f"/api/analytics/allocation?start={cutoff.isoformat()}"
+    ).json()
+    assert from_start["start"] == cutoff.isoformat()
+    assert from_start["wants"]["amount_minor"] == 2500
+
+    to_end = client.get(f"/api/analytics/allocation?end={cutoff.isoformat()}").json()
+    assert to_end["end"] == cutoff.isoformat()
+    assert to_end["wants"]["amount_minor"] == 1500

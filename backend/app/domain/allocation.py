@@ -31,7 +31,8 @@ quietly lie:
 
 Shares are ``None`` without income rather than zero, for the same reason
 ``analytics`` does it: "0% to needs" and "no income this period" are different
-statements and must not render the same.
+statements and must not render the same. Target *amounts* and variances go the
+same way -- a £0 target makes every pound spent look like an overspend.
 """
 
 from __future__ import annotations
@@ -148,6 +149,14 @@ def _bucket(
     share = (amount / income) if income > ZERO else None
     if target is None:
         return Bucket(key, label, amount, share, None, None, None, None)
+    if share is None:
+        # No income. The rule's percentage still stands -- 50% of income is what
+        # the rule says whether or not there was any -- but the *amount* it
+        # implies does not exist, and neither does the variance from it. A zero
+        # target reads as "over target by everything you spent", which is the
+        # same false claim a zero share would make, and is why shares are None
+        # here rather than zero.
+        return Bucket(key, label, amount, None, target, None, None, None)
     # Targets stay exact rather than rounded to pence: 0.50 + 0.30 + 0.20 is
     # exactly 1, so unrounded targets sum to income and rounded ones need not.
     target_amount = income * target

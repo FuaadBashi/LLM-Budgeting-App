@@ -134,6 +134,8 @@ class StrategyPlan:
     #: What this plan cannot tell you, and why. Empty when it is a whole answer.
     reason: str
     monthly_surplus: Decimal
+    #: What the minimums actually demand, capped per debt at what is owed.
+    #: See :func:`minimums_due`.
     minimum_payments_total: Decimal
     #: How far short the monthly amount falls. Zero when the plan is feasible.
     shortfall: Decimal
@@ -173,6 +175,23 @@ class PayoffComparison:
         return self.snowball.reason or self.avalanche.reason
 
     @property
+    def comparable(self) -> bool:
+        """Whether the two plans can be set against each other at all.
+
+        Feasible is not enough. Both plans can cover their minimums while only
+        one of them ever finishes -- snowball spends its surplus on a small
+        cheap debt while a dear one compounds past the point the surplus can
+        catch. The losing plan's total is then 600 months of runaway
+        compounding, and subtracting it produces a difference in the
+        quintillions with "saved" written next to it.
+        """
+        return (
+            self.feasible
+            and self.snowball.months_to_debt_free is not None
+            and self.avalanche.months_to_debt_free is not None
+        )
+
+    @property
     def interest_saved_by_avalanche(self) -> Decimal:
         """The number that makes the trade-off legible.
 
@@ -180,8 +199,12 @@ class PayoffComparison:
         order costs. Never negative when both plans run -- avalanche puts every
         spare pound against the dearest money, and no other ordering of the same
         payments is cheaper.
+
+        Zero, not a difference, when the two are not :attr:`comparable`: one of
+        the totals is then a truncated horizon rather than the cost of a plan.
+        Read ``comparable`` and ``reason`` before this figure.
         """
-        if not self.feasible:
+        if not self.comparable:
             return ZERO
         return self.snowball.total_interest - self.avalanche.total_interest
 
@@ -252,6 +275,29 @@ def _ordered(debts: list[Debt], strategy: Strategy) -> list[Debt]:
     return sorted(debts, key=lambda d: (-d.apr, d.balance, d.name))
 
 
+def minimums_due(debts: list[Debt]) -> Decimal:
+    """What the minimums actually demand of the first month.
+
+    Capped per debt at what is owed, because no lender asks for more than the
+    balance: a card with £10 left on it and a £50 stated minimum wants £10.
+    The projection has always paid ``min(minimum, balance)``; summing the
+    stated minimums instead made the *gate* stricter than the loop it guards,
+    so a plan one payment from finished was refused as unaffordable.
+
+    Month one is the worst month, so one check covers the plan. A debt that
+    cannot pay its whole balance this month pays the full minimum, and its
+    minimum never rises; a debt that can is gone, and asks for nothing again.
+
+    Interest is inside the cap because interest is charged before the payment
+    lands -- the balance the minimum meets is the charged one.
+    """
+    total = ZERO
+    for d in debts:
+        owed = d.balance + _money(d.balance * monthly_rate(d.apr))
+        total += min(d.minimum_payment, owed)
+    return total
+
+
 def _cannot(
     strategy: Strategy,
     monthly_surplus: Decimal,
@@ -289,7 +335,7 @@ def project(
     included* -- not the extra on top of them. That is why running short of the
     minimums is a state this can be in at all.
     """
-    minimums = sum((d.minimum_payment for d in debts), ZERO)
+    minimums = minimums_due(debts)
 
     if not debts:
         return StrategyPlan(

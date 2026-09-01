@@ -223,3 +223,38 @@ allowed exactly where there is no history to damage.
 years-long horizon that is measured in megabytes, and the alternative — a purge that has to
 reason about what history still needs — is the kind of feature that eventually deletes the wrong
 thing.
+
+## Rollover reset is a one-shot write-off. Decided 1 September 2026
+
+**A reset forgives the carry once, at the boundary where its revision takes
+effect.** It is not a standing setting, and it does not re-fire for the other
+periods that revision governs.
+
+This was genuinely ambiguous. `BudgetRevision.rollover_reset`'s own docstring
+says "zero the carry from this revision forward", which reads either way, and
+the engine originally re-applied it inside the period loop. An adversarial review
+caught what that meant in practice: write off £400 of carried overspend in
+September and every surplus earned from October onward silently vanishes, for the
+life of the budget, with nothing on screen explaining why. Rollover would appear
+configured and simply not happen.
+
+**The deciding argument is that permanent suspension is already expressible.**
+`rollover_policy = NONE` says exactly that, is chosen deliberately, and is
+visible in the budget's own settings. Having two ways to say the same thing —
+one of them a sticky, invisible side effect of a one-time act of forgiveness —
+is the shape of bug this codebase rejects everywhere else (see *accepted and
+ignored* in the handoff's traps).
+
+A user who resets is asking for relief from a specific accumulated debt, not to
+abandon rollover forever. If they wanted no rollover, the policy field says so.
+
+**Consequence:** the reset marks a boundary, so a budget can be reset more than
+once and each reset forgives only what was carried into its own period. The test
+that pinned the old behaviour was rewritten rather than deleted, and says why.
+
+**Still open** (found by the same review, not yet fixed): the amount written off
+is reported nowhere — `rollover_forgiven` is populated only from the period's
+exit boundary, so an entry-side write-off is invisible in the result. That
+contradicts the spec's own "it must not be silent" rationale and should be
+closed. Separately, a mid-period `effective_from` is accepted with 200 and then
+silently deferred to the next period; it should be rejected.

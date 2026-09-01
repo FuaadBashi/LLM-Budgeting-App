@@ -203,6 +203,63 @@ def test_a_later_revision_does_not_inherit_the_reset(client, session):
     assert revision_on(session, budget_id, SEPTEMBER).rollover_reset is True
 
 
+def test_an_edit_inherits_the_plan_in_force_at_its_own_date(client, session):
+    """Inheritance reads the revision in force at ``effective_from``, not the
+    latest one.
+
+    Taking the latest lets a revision dated *after* the edit reach backwards. A
+    pause scheduled for December, plus a backdated August amount correction, gave
+    August ``active=False`` -- and the engine drops paused periods entirely, so
+    an amount edit deleted August through November from the chain.
+    """
+    budget_id = create_via_api(client)
+    r = client.patch(
+        f"/api/budgets/{budget_id}",
+        json={
+            "amount_minor": 50000,
+            "active": False,
+            "rollover_policy": "none",
+            "effective_from": "2026-12-01",
+        },
+    )
+    assert r.status_code == 200
+
+    r = client.patch(
+        f"/api/budgets/{budget_id}",
+        json={"amount_minor": 60000, "effective_from": "2026-08-01"},
+    )
+    assert r.status_code == 200
+
+    august = revision_on(session, budget_id, date(2026, 8, 1))
+    assert august.active is True
+    assert august.rollover_policy is RolloverPolicy.FULL
+    # And December keeps what it was actually given.
+    december = revision_on(session, budget_id, date(2026, 12, 1))
+    assert december.active is False
+    assert december.rollover_policy is RolloverPolicy.NONE
+
+
+def test_a_scheduled_pause_does_not_delete_months_from_the_chain(client, session):
+    """The engine-side consequence of the above, stated independently.
+
+    Every month from July to November is still a live period after an amount
+    edit; the pause takes effect in December, where it was asked for.
+    """
+    budget_id = create_via_api(client)
+    client.patch(
+        f"/api/budgets/{budget_id}",
+        json={"amount_minor": 50000, "active": False, "effective_from": "2026-12-01"},
+    )
+    client.patch(
+        f"/api/budgets/{budget_id}",
+        json={"amount_minor": 60000, "effective_from": "2026-08-01"},
+    )
+
+    session.expire_all()
+    budget = session.get(Budget, budget_id)
+    assert sorted(periods(session, budget)) == [7, 8, 9, 10, 11]
+
+
 def test_changing_the_amount_does_not_resume_a_paused_budget(client, session):
     """The same contract, for the other standing setting on the revision.
 
@@ -268,15 +325,41 @@ def test_periods_before_the_reset_keep_their_original_carry(session, accounts):
     assert after[8].remaining == Decimal("-400")
 
 
-def test_the_reset_holds_for_every_period_its_revision_governs(session, accounts):
-    """It marks the revision, not one period: while that plan is in force the
-    carry opens at zero, so re-reading months later gives the same answer."""
+def test_a_reset_forgives_once_and_then_rollover_resumes(session, accounts):
+    """The reset is a one-shot write-off at its boundary, not a standing setting.
+
+    This test previously asserted the opposite — that the reset re-fired for
+    every period its revision governed, which meant September's £500 surplus,
+    and every surplus after it, silently vanished for the life of the budget. A
+    user who wrote off £400 of carried overspend would have lost rollover
+    permanently without anything on screen saying so.
+
+    Permanent suspension is already expressible as rollover_policy = NONE, chosen
+    deliberately and visible in the budget's settings. A one-time act of
+    forgiveness must not also be a hidden, sticky change of policy.
+    """
     b = overspent_july_and_august(session, accounts)
     revise(session, b, SEPTEMBER, reset=True)
-
     got = periods(session, b)
-    for month in (9, 10, 11):
-        assert got[month].rollover_in == Decimal("0")
-        # £1,000 in October and £1,500 in November are the one-shot reading,
-        # where September's £500 surplus starts carrying again.
-        assert got[month].remaining == Decimal("500")
+
+    # September opens at zero: that is the write-off doing its job.
+    assert got[9].rollover_in == Decimal("0")
+    assert got[9].remaining == Decimal("500")
+
+    # And then rollover resumes. September spent nothing, so its £500 surplus
+    # carries into October, and October's into November. £0 in either month
+    # would be the old re-firing behaviour.
+    assert got[10].rollover_in == Decimal("500")
+    assert got[10].remaining == Decimal("1000")
+    assert got[11].rollover_in == Decimal("1000")
+    assert got[11].remaining == Decimal("1500")
+
+
+def test_the_write_off_does_not_reach_back_past_its_own_boundary(session, accounts):
+    """Forgiving September must not also forgive August's overspend."""
+    b = overspent_july_and_august(session, accounts)
+    revise(session, b, SEPTEMBER, reset=True)
+    got = periods(session, b)
+
+    assert got[8].remaining == Decimal("-400"), "August keeps what it actually did"
+    assert got[7].rollover_in == Decimal("0")
