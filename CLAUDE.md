@@ -4,7 +4,7 @@ Ledger-first personal finance. FastAPI + SQLAlchemy + Postgres; Next.js App
 Router + Tailwind. Single user, GBP.
 
 **Read `docs/HANDOFF.md` first** — phase table, architecture map, the invariant
-register (X1–X20) and a traps section listing bugs already found and fixed.
+register (X1–X22) and a traps section listing bugs already found and fixed.
 `docs/DECISIONS.md` records why things are the way they are; `docs/RUNNING.md`
 covers phone and desktop setup.
 

@@ -66,3 +66,29 @@ def test_X9_reporting_day_never_uses_the_server_local_date():
                 violations.append(f"{path.relative_to(BACKEND_ROOT)}:{node.lineno}")
 
     assert violations == []
+
+
+def test_the_demo_seed_writes_no_fixed_dates():
+    """The demo must be dated from today, never from a written-down day.
+
+    Seeded as "31 August 2026", the demo drifted into the past a day at a time:
+    a month that ended long ago, no income expected, no days remaining, nothing
+    to project. The data looked broken when only the calendar had moved. The fix
+    is only durable if a future edit cannot quietly reintroduce a literal.
+
+    ``date(...)`` calls whose arguments are all literals are the ones that
+    freeze; ``date(index // 12, index % 12 + 1, 1)`` is derived and fine.
+    """
+    seed = BACKEND_ROOT / "scripts" / "seed_demo.py"
+    tree = ast.parse(seed.read_text())
+
+    frozen = [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "date"
+        and node.args
+        and all(isinstance(a, ast.Constant) for a in node.args)
+    ]
+    assert frozen == [], f"fixed dates would drift out of date: {frozen}"

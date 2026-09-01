@@ -1,6 +1,6 @@
 # Handoff
 
-State of play as at 31 August 2026. Read [FINANCIAL_RULEBOOK.md](FINANCIAL_RULEBOOK.md) first —
+State of play as at 1 September 2026. Read [FINANCIAL_RULEBOOK.md](FINANCIAL_RULEBOOK.md) first —
 it is the contract, and where code disagrees with it that is a defect, not a variation.
 
 ---
@@ -20,17 +20,19 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 8 | Simulation lab | ✅ |
 | 9 | Intelligence — explanations, recommendations | ✅ |
 | 10 | Polish, backups, hosting | ◐ backups and exposure hardening done; the deploy itself is yours |
-| 11 | Assisted categorisation (LLM) | ◐ foundation done; receipt vision outstanding |
+| 11 | Assisted categorisation (LLM) | ✅ |
 
-**Phases 0–9 complete; Phase 10's backup half is done; Phase 11 (assisted categorisation) is
-in.** 496 tests. Hosting is the only substantial thing left.
+**Phases 0–9 and 11 complete; Phase 10's backup half is done.** 667 tests. Deployment is the
+only substantial thing left, and `docs/RUNNING.md` already describes the setup worth having
+(Tailscale, real certificates, nothing exposed to the internet).
 
 Frontend has ten screens — dashboard, transactions, analytics, insights, budgets, calendar,
 goals, simulator, import and data — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
 The Add button records expenses, income, transfers/debt payments and refunds as balanced two-leg
 transactions. The transactions screen
-lists history, shows each row's effect on liquid cash, and offers Void as the correction path;
-voided rows are hidden by default and never deleted.
+lists history, shows each row's effect on liquid cash, and offers both correction paths: Void
+for a wrong amount or date, edit-in-place for a wrong description, merchant or category. Voided
+rows are hidden by default and never deleted.
 
 ---
 
@@ -43,11 +45,12 @@ live; routes only translate to and from integer minor units.
 |---|---|
 | `domain/clock.py` | The single source of "today", in the reporting timezone |
 | `domain/periods.py` | Budget period resolution, stepping, day counts |
-| `domain/categories.py` | Cycle-safe category subtree scoping |
+| `domain/categories.py` | Cycle-safe subtree scoping; the account default-category stamp |
 | `domain/spend.py` | The definition of `Spent` |
 | `domain/budgets.py` | Rollover chain, allowance, pace |
 | `domain/projection.py` | Projected period-end spend |
-| `domain/budget_warnings.py` | W1–W6 |
+| `domain/budget_warnings.py` | W1–W6 and warning (e) |
+| `domain/merchant_baseline.py` | Warning (e): robust z against a merchant's own history |
 | `domain/budget_recovery.py` | Cash headroom, goal sacrifice ordering |
 | `domain/recurrence.py` | RRULE building and expansion |
 | `domain/obligations.py` | Instance generation and transaction matching |
@@ -107,6 +110,8 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X18 | No model output can become a figure — only an existing category (A1) | ✅ `test_enrichment.py` — invented categories and numeric answers both resolve to none |
 | X19 | The app is unchanged with no API key (A3) | ✅ `test_enrichment.py` — import works, no network, no error |
 | X20 | A receipt reaches the ledger only through the candidate inbox (A1') | ✅ `test_receipts.py` — staging leaves balances and transaction count untouched |
+| X21 | The merchant baseline reads the same postings `Spent` does | ✅ Shared `_legs_in_scope` selector plus `test_merchant_anomaly.py::test_the_baseline_reads_the_same_postings_budget_spent_does` |
+| X22 | An account default is stamped on the write, never derived on the read | ✅ `test_account_defaults.py` — changing a default leaves written postings alone, and a restore reproduces the file |
 
 ### Assisted categorisation and receipt reading (Phases 7 and 11)
 
@@ -129,12 +134,16 @@ The cost design is the cache, not the prompt. `merchant_suggestions` is keyed on
 `TESCO STORES 3421` collapses to one row and one question. A merchant is asked about once, ever;
 a user correction is stored as theirs and outranks the model permanently (A2).
 
-**Recommended next task.** The deploy itself — domain, TLS, wherever it runs — which needs your
-decisions, not more code. After that only two small gaps remain: `rollover_reset` has no UI, and
-transactions cannot be edited for non-monetary fields. OCR is the expensive one — its
-candidate-inbox plumbing now exists so it is unblocked, but it needs a HTTPS in front of it and `COOKIE_SECURE=true`, as described above. Hosting is
-mostly the HTTPS/`COOKIE_SECURE` work already described above. The correctness and security debt
-below are both empty.
+**Recommended next task.** The deploy, which needs your decisions rather than more code. The
+smallest version that works is in `docs/RUNNING.md`: `tailscale serve --bg 3000`, then
+`COOKIE_SECURE=true`. `deploy/` covers a public domain instead, which is more work and more
+exposure than a personal ledger usually justifies.
+
+Everything else the earlier handoffs listed as outstanding has landed: `rollover_reset` has a
+control on the budgets screen, transactions can be edited for their non-monetary fields, receipt
+vision reads a photograph into the candidate inbox, and the two rollover defects an adversarial
+review found are closed with named tests. The correctness and security debt below are both
+empty.
 
 ---
 
@@ -186,16 +195,22 @@ each with named tests.
    what a closed period meant. Scenarios are the single exception — they are hypotheticals with
    no audit trail to preserve, so `DELETE /scenarios/{id}` exists and the UI offers it. The rule
    is stated in `scenario_routes.delete_scenario`.
-2. `rollover_reset` works but no UI reaches it, and a budget's period/anchor cannot be changed
-   after creation (deliberately — that reshapes every historical boundary).
+2. ~~`rollover_reset` has no UI~~ — done. The budget editor offers "write it off from this
+   period on", sent only when chosen so an unrelated amount change cannot silently un-forgive an
+   earlier write-off. A budget's period and anchor still cannot be changed after creation, and
+   that stays deliberate: it reshapes every historical boundary.
 3. ~~XLSX and PDF export~~ — done. All four §10 formats ship. The workbook writes amounts as
    numbers so a spreadsheet can sum them; the PDF is a statement for reading, not re-importing.
    `transactions.csv` stays canonical and both new formats are tested against it.
 4. ~~No restore UI~~ — done. `/data` handles all four exports, the JSON backup, and restore with
    a client-side parse, a preview of what the file contains, and a typed confirmation when the
    database is not empty.
-5. Transaction editing. Void plus re-enter is the only correction path; there is no edit for
-   non-monetary fields, which §2 of the rulebook permits.
+5. ~~Transaction editing~~ — done. `PATCH /api/transactions/{id}` corrects description,
+   merchant and category in place; amount and booking date are refused with a 422 naming the
+   void endpoint, because those are the corrections that have to say the money was wrong.
+6. Accounts have no management screen. They are created through the API and seeded; the only
+   account setting the UI reaches is the default category, on the budgets screen. Renaming or
+   archiving one still needs the API.
 
 ### Goal integrity coverage
 
@@ -207,9 +222,10 @@ reconciles these engines with the ledger, budget and calendar for one complete m
 
 ### Known sharp edges
 
-- **Seed data is dated 2026-08-31.** `scripts/seed_demo.py` writes fixed dates; as the real clock
-  moves past them the demo drifts into the past and the dashboard looks odd. Re-seed, or pass
-  `as_of` to the dashboard endpoints.
+- **Seed data is measured from today, and re-seeding wipes the ledger.** `scripts/seed_demo.py`
+  now writes seven months ending at `clock.today`, so the demo no longer drifts into the past —
+  but it still TRUNCATEs every data table first. Never point it at anything but the dev database.
+  An AST guard fails the suite if a fixed date is reintroduced.
 - **`alembic` targets the dev database by default.** `alembic downgrade base` wipes `budgetapp`.
   Point it at `budgetapp_test` when experimenting.
 - **Fortnightly budgets need `anchor_date`; everything else must not have one.** A CHECK enforces
@@ -291,7 +307,24 @@ These are bugs already found and fixed. They will come back if the reasoning is 
 - **A PATCH field that is not optional is a field every edit overwrites.** `rollover_reset` was
   `bool = False`, so bumping an amount resent `false` and silently un-forgave an overspend
   written off earlier in the same period. Partial-update fields are `T | None = None`, applied
-  only when not None. `test_rollover_reset.py` pins it.
+  only when not None, and read through `model_fields_set` so an explicit `null` still clears.
+  `test_rollover_reset.py` pins it; `AccountEditIn` follows the same shape.
+- **A MAD of zero is the common case, not the corner.** Every fixed subscription has a median
+  absolute deviation of exactly zero, so the merchant z-score divides by zero on the most
+  predictable merchants in the ledger. The epsilon-guarded version is worse than the crash: it
+  reports a 50p rise on a £10.99 subscription as a 26-sigma event. `merchant_baseline` falls back
+  to `|x − median| >= max(£10.00, 25% · median)`, and the tests pin both branches.
+- **Absence is not a zero.** A merchant that did not appear in a period contributes no
+  observation to its baseline. Filling the gap with zero drags the median down until the next
+  ordinary purchase looks extraordinary.
+- **An account default is stamped on the write, never applied on the read.** Deriving it at read
+  time would silently recategorise every historical untagged posting the moment the default
+  changed — last March's essential rent becoming discretionary, with nothing on screen saying so.
+  `restore` deliberately does not stamp, or a backup would stop round-tripping (X17).
+- **`enrich` needs its merchant history passed in.** It is a required argument rather than an
+  optional one precisely so a caller cannot forget it: a `None` default would downgrade the
+  merchant warning to `not_evaluated` silently, which is the quietest possible way to lose a
+  warning. `budget_routes` fetches once for the whole chain, never once per period.
 
 ---
 

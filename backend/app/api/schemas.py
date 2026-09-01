@@ -41,6 +41,7 @@ class AccountOut(BaseModel):
     kind: AccountKind
     currency: str
     balance_minor: int
+    default_category_id: uuid.UUID | None = None
 
 
 class AccountIn(BaseModel):
@@ -48,6 +49,20 @@ class AccountIn(BaseModel):
     kind: AccountKind
     currency: str = "GBP"
     opening_balance_minor: int = 0
+    default_category_id: uuid.UUID | None = None
+
+
+class AccountEditIn(BaseModel):
+    """Partial update. Only the fields actually sent are applied.
+
+    ``T | None = None`` with ``model_fields_set``, not a plain default: a field
+    that is not optional is a field every edit overwrites, which is how
+    ``rollover_reset`` once un-forgave a write-off on an unrelated amount change.
+    Clearing the default therefore has to be an explicit ``null``, and omitting
+    the key leaves it alone.
+    """
+
+    default_category_id: uuid.UUID | None = None
 
 
 class CategoryOut(BaseModel):

@@ -38,6 +38,8 @@ export interface Account {
   kind: string;
   currency: string;
   balance_minor: Minor;
+  /** Stamped onto an untagged leg at write time. Expense accounts only. */
+  default_category_id: string | null;
 }
 
 export interface Category {
@@ -82,6 +84,17 @@ export interface Transaction {
   budget_impacts: BudgetImpact[];
 }
 
+export interface MerchantAnomaly {
+  merchant: string;
+  spent_minor: Minor;
+  /** What this merchant usually costs over a period of the same length. */
+  median_minor: Minor;
+  deviation_minor: Minor;
+  observations: number;
+  /** Null when every past period was identical, so no z-score exists. */
+  robust_z: number | null;
+}
+
 export interface Warning {
   code: string;
   /** fired | suppressed | not_evaluated. The third is not "fine". */
@@ -122,6 +135,8 @@ export interface BudgetPeriod {
   projection_reason: string | null;
 
   warnings: Warning[];
+  /** Evidence for `merchant_anomaly`. Empty unless that warning fired. */
+  merchant_anomalies: MerchantAnomaly[];
   breakdown: [string, Minor][];
 }
 
@@ -632,6 +647,8 @@ export const updateBudget = (id: string, body: unknown) =>
   patch<BudgetSummary>(`/budgets/${id}`, body);
 export const updateObligation = (id: string, body: unknown) =>
   patch<Obligation>(`/obligations/${id}`, body);
+export const updateAccount = (id: string, body: unknown) =>
+  patch<Account>(`/accounts/${id}`, body);
 export const getPeriodSummary = (start?: string, end?: string) =>
   get<PeriodSummary>(
     start && end ? `/analytics/period?start=${start}&end=${end}` : "/analytics/period",

@@ -1,11 +1,14 @@
+import { AccountDefaults } from "@/components/AccountDefaults";
 import { AppShell } from "@/components/AppShell";
 import { BudgetCard } from "@/components/BudgetCard";
 import { BudgetManager } from "@/components/BudgetManager";
 import { requireSession } from "@/lib/guard";
 import {
+  getAccounts,
   getBudgetList,
   getBudgets,
   getCategories,
+  type Account,
   type BudgetPeriod,
   type BudgetSummary,
   type Category,
@@ -20,13 +23,15 @@ export default async function BudgetsPage() {
   let budgets: BudgetSummary[] = [];
   let periods: BudgetPeriod[] = [];
   let categories: Category[] = [];
+  let accounts: Account[] = [];
   let error: string | null = null;
 
   try {
-    [budgets, periods, categories] = await Promise.all([
+    [budgets, periods, categories, accounts] = await Promise.all([
       getBudgetList(),
       getBudgets(),
       getCategories(),
+      getAccounts(),
     ]);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
@@ -57,6 +62,10 @@ export default async function BudgetsPage() {
           <>
             <section>
               <BudgetManager budgets={budgets} periods={periods} categories={categories} />
+            </section>
+
+            <section>
+              <AccountDefaults accounts={accounts} categories={categories} />
             </section>
 
             {periods.length > 0 && (

@@ -16,13 +16,14 @@ Three documents govern the code:
 
 ## Current state
 
-**Phases 0–4 complete — the MVP boundary the plan draws.** It can replace a spreadsheet: record
-transactions, manage balances, track budgets with rollover, save toward goals, and see upcoming
-cash flow against a protected buffer. Manual transaction entry is available from the dashboard.
-224 tests.
+**Phases 0–9 and 11 complete; Phase 10 is backups-done, deploy-yours.** It replaces a
+spreadsheet and then some: record transactions, manage balances, track budgets with rollover and
+warnings, save toward goals, see upcoming cash flow against a protected buffer, import statements
+and receipts through a candidate inbox, run what-if scenarios, and read an explanation of how
+every figure was reached. 667 tests.
 
-Not built: analytics and export (Phase 5), CSV/statement import (6), OCR (7), simulation (8),
-recommendations (9).
+Left to do: the deploy itself. `docs/RUNNING.md` describes the setup worth having — Tailscale,
+real certificates, nothing exposed to the internet.
 
 ## Design in one paragraph
 
@@ -94,17 +95,19 @@ backend/
   app/
     models/      accounts, transactions, postings, budgets, goals, obligations
     domain/      clock, periods, categories, spend, budgets, projection,
-                 budget_warnings, budget_recovery, recurrence, obligations,
-                 income, reimbursement, impact, analytics, restore,
-                 calendar, classification, disposable, money
+                 budget_warnings, merchant_baseline, budget_recovery, recurrence,
+                 obligations, income, reimbursement, impact, analytics, restore,
+                 calendar, classification, disposable, money, simulation,
+                 importing, receipts, enrichment, explain, insights, backup
     api/         routes and the minor-unit boundary
   alembic/       migrations, including the L1 balance and L3 correction triggers
-  scripts/       seed_demo.py
+  scripts/       seed_demo.py, backup.py, set_password.py, backfill_categories.py
   tests/unit/    one module per invariant group
 frontend/
   src/lib/       API client, minor-unit money formatting
   src/components/ app shell, transaction entry, stat tiles, budget card and meter, balance curve
-  src/app/       dashboard
+  src/app/       ten screens: dashboard, transactions, analytics, insights, budgets,
+                 calendar, goals, simulator, import, data
 docs/
 ```
 

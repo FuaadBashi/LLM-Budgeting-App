@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from app.domain.merchant_baseline import MerchantReview
 from app.domain.money import ZERO, floor_money
 from app.models.enums import BudgetPeriod
 
@@ -27,6 +28,7 @@ MATERIAL_SINGLE_EXPENSE = "material_single_expense"
 ENVELOPE_OVERSPEND = "envelope_overspend"
 BUDGET_EXHAUSTED_AT_START = "budget_exhausted_at_period_start"
 PLAN_BREACH = "plan_breach"
+MERCHANT_ANOMALY = "merchant_anomaly"
 
 PACE_THRESHOLD = Decimal("0.80")
 
@@ -54,6 +56,7 @@ def evaluate(
     projected_spend: Decimal | None,
     projection_reason: str | None,
     safe_to_spend: Decimal | None = None,
+    merchant_review: MerchantReview | None = None,
 ) -> list[BudgetWarning]:
     """The full warning set for one budget period."""
     out: list[BudgetWarning] = []
@@ -137,6 +140,34 @@ def evaluate(
                 PLAN_BREACH,
                 FIRED if safe_to_spend < ZERO else SUPPRESSED,
                 detail={"safe_to_spend": safe_to_spend},
+            )
+        )
+
+    # Warning (e) -- one merchant's spend out of line with its own history. The
+    # review arrives already computed because it needs the ledger, but the verdict
+    # is decided here so that every warning's fired/suppressed/not_evaluated
+    # reasoning lives in one module.
+    #
+    # "Nobody has enough history yet" is not "everything looks normal". A budget
+    # in its first quarter has no opinion to offer and must say so, or silence
+    # reads as reassurance.
+    if merchant_review is None:
+        out.append(BudgetWarning(MERCHANT_ANOMALY, NOT_EVALUATED, reason="not_supplied"))
+    elif merchant_review.reason is not None:
+        out.append(
+            BudgetWarning(
+                MERCHANT_ANOMALY, NOT_EVALUATED, reason=merchant_review.reason
+            )
+        )
+    else:
+        out.append(
+            BudgetWarning(
+                MERCHANT_ANOMALY,
+                FIRED if merchant_review.anomalies else SUPPRESSED,
+                detail={
+                    "anomalies": merchant_review.anomalies,
+                    "judged": merchant_review.judged,
+                },
             )
         )
 

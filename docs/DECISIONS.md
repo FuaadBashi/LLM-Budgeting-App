@@ -252,9 +252,87 @@ abandon rollover forever. If they wanted no rollover, the policy field says so.
 once and each reset forgives only what was carried into its own period. The test
 that pinned the old behaviour was rewritten rather than deleted, and says why.
 
-**Still open** (found by the same review, not yet fixed): the amount written off
-is reported nowhere — `rollover_forgiven` is populated only from the period's
-exit boundary, so an entry-side write-off is invisible in the result. That
-contradicts the spec's own "it must not be silent" rationale and should be
-closed. Separately, a mid-period `effective_from` is accepted with 200 and then
-silently deferred to the next period; it should be rejected.
+**Both defects the same review found are now closed.** `rollover_forgiven`
+carries the entry-side write-off as well as the exit-side one — they are summed
+at a single line, because whichever ran second would otherwise overwrite the
+other, and the one that would be lost is the write-off whose entire purpose is
+forgiveness. And a mid-period `effective_from` is refused with a 422 naming the
+boundary to use, rather than accepted with a 200 and silently deferred:
+accepted-and-ignored is the failure this codebase refuses everywhere else.
+
+
+## Account default categories. Decided 1 September 2026
+
+Deferred out of Phase 3 with the cost written down: loan interest, bank fees and
+rent paid by standing order arrive with no category, uncategorised expense
+spending counts toward a null-scope budget by design, and so £50 of
+contractually unavoidable interest consumes 8.3% of a £600 discretionary budget
+that no amount of restraint can move.
+
+**An account's default is stamped onto the posting at write time, never applied
+when a figure is read.** This is the whole decision. A read-time default is one
+line shorter and quietly catastrophic: changing an account's default would
+recategorise every untagged posting ever written against it, so last March's
+essential rent becomes discretionary and a closed period stops meaning what it
+meant. That is the same failure archiving-instead-of-deleting exists to prevent
+(see *Deletion and retention*), reached by a different route.
+
+The consequence is accepted deliberately: changing a default is forward-only,
+and history keeps the category it was filed under. `scripts/backfill_categories.py`
+is the explicit way to change the past — dry-run by default, `--apply` to write —
+because rewriting how a closed period was categorised should take a decision, not
+a side effect.
+
+**Only expense accounts may have one, and anything else is a 422.** The field is
+read in exactly one place, when stamping an expense leg, because that is what
+`Spent` is defined over (B1). Stored on a current account it would be accepted,
+never read, and shown in the UI as a setting that does nothing — accepted and
+ignored, which this codebase returns 422 for rather than shipping.
+
+**Restore does not stamp.** A restore reproduces a file; it does not re-decide
+anything. A posting that was uncategorised when the backup was taken comes back
+uncategorised, or X17 stops holding the first time an account gains a default.
+
+## Merchant anomaly, warning (e). Decided 1 September 2026
+
+The last of Phase 3's deferred items, implemented to the arithmetic the spec
+fixed: trailing six complete periods, minimum three observations, robust
+`z = 0.6745 · (x − median) / MAD` against a threshold of 3.5, and the MAD-zero
+fallback `|x − median| >= max(£10.00, 25% · median)`. The spec's worked figures —
+Tesco's 40.175 median and 1.425 MAD putting 96.40 at z = 26.61, Netflix silent at
+15.99 and firing at 24.99 — are pinned as tests rather than restated as prose.
+
+Three things the spec left open, decided here.
+
+**One observation per period, not per transaction.** "Six-month median" is a
+comparison between this period's total and the totals of the six before it. Per
+transaction would answer a different question, and W3 already answers that one on
+the write that caused it. It also makes "six periods" and "three observations"
+quantities in the same units, which is the only reading under which the minimum
+means anything.
+
+**A merchant absent from a period contributes no observation.** The obvious
+alternative — treat absence as a zero — drags the median toward zero until the
+next ordinary purchase looks extraordinary. A merchant used three times in six
+months has three observations, not three and three zeroes.
+
+**Only the high side fires.** The statistic is symmetric; the warning is not.
+An unusually cheap month at Tesco is not something to interrupt anyone about, and
+one code covering both directions leaves the budget card unable to say what it
+means. The magnitudes are exactly the spec's; the direction gate is applied on
+top, and neither worked example changes verdict.
+
+**No `merchant_baseline` cache table, despite the spec asking for one.** The
+index is real and shipped (`ix_transactions_merchant`, partial on NOT NULL). The
+cache is not, for the reason the same section of the spec gives for declining the
+`budget_period_snapshot` cache: a cache is the single most likely way to violate
+R1, and it is only worth building once a profiler says so. The baseline is one
+query for a whole budget chain — the same order as the safe-to-spend lookup
+`enrich` already makes. If a profile ever disagrees, the cache can be added
+behind the existing selector without moving the arithmetic.
+
+**Bucketing happens in Python, not SQL.** Postgres can group by month; it cannot
+group by a fortnight measured from an arbitrary anchor, and `EXTRACT(DOW)` is
+Sunday-based where `date.weekday()` is Monday-based. A SQL-side grouping would be
+right for two of the six period kinds and quietly wrong for the other four, which
+is the same reasoning `periods.py` already records.

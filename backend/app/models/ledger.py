@@ -22,6 +22,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -53,7 +54,21 @@ class Account(TimestampedUUID, Base):
     apr: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
     minimum_payment: Mapped[Decimal | None] = mapped_column(Money, nullable=True)
 
+    # The category an untagged posting against this account is stamped with at
+    # write time. Contractual spending -- loan interest, bank fees, rent paid by
+    # standing order -- arrives with no category and lands in the null-scope
+    # discretionary bucket, where GBP 50 of unavoidable interest consumes 8.3% of a
+    # GBP 600 discretionary budget the user has no way to stop.
+    #
+    # Nullable, and only meaningful on EXPENSE accounts: those are the legs Spent
+    # is defined over (invariant B1). The API refuses to set it on any other kind
+    # rather than storing a field that would never be read.
+    default_category_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("categories.id"), nullable=True
+    )
+
     postings: Mapped[list[Posting]] = relationship(back_populates="account")
+    default_category: Mapped[Category | None] = relationship("Category")
 
     def __repr__(self) -> str:
         return f"<Account {self.name} ({self.kind})>"
@@ -110,7 +125,17 @@ class Transaction(TimestampedUUID, Base):
         lazy="selectin",
     )
 
-    __table_args__ = (Index("ix_transactions_status_date", "status", "booking_date"),)
+    __table_args__ = (
+        Index("ix_transactions_status_date", "status", "booking_date"),
+        # Warning (e) groups roughly six periods of history by merchant. Partial
+        # on NOT NULL: a merchant is optional and most manual entries have none,
+        # so indexing the nulls would double the index for rows never wanted.
+        Index(
+            "ix_transactions_merchant",
+            "merchant",
+            postgresql_where=text("merchant IS NOT NULL"),
+        ),
+    )
 
     def __repr__(self) -> str:
         return f"<Transaction {self.booking_date} {self.description!r}>"

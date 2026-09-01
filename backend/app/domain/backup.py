@@ -86,6 +86,11 @@ def build_payload(session: Session) -> dict:
     B-C: ledger tables only. Nothing from configuration or `.env` appears here,
     because a backup ends up in places the database never does.
     """
+    # Every column an account actually carries. The three optional ones are here
+    # because a restore that silently dropped them would lose settings without
+    # moving a balance -- so X17 would still pass while the file stopped being a
+    # faithful copy. Added as optional keys rather than a format bump: a version 1
+    # file simply lacks them, and `restore` reads them with `.get`.
     accounts = [
         {
             "id": str(a.id),
@@ -94,6 +99,13 @@ def build_payload(session: Session) -> dict:
             "currency": a.currency,
             "opening_balance": str(a.opening_balance),
             "active": a.active,
+            "default_category_id": (
+                str(a.default_category_id) if a.default_category_id else None
+            ),
+            "apr": str(a.apr) if a.apr is not None else None,
+            "minimum_payment": (
+                str(a.minimum_payment) if a.minimum_payment is not None else None
+            ),
         }
         for a in session.scalars(select(Account).order_by(Account.name))
     ]

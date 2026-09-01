@@ -27,6 +27,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.domain import analytics, budgets as budget_engine, budget_warnings
+from app.domain.merchant_baseline import MerchantAnomaly
 from app.domain.clock import today as clock_today
 from app.domain.disposable import compute_safe_to_spend
 from app.domain.importing import normalise_description
@@ -114,6 +115,31 @@ WARNING_TEXT = {
 }
 
 
+def _merchant_insight(budget_name: str, anomaly: MerchantAnomaly) -> Insight:
+    """One merchant, its usual figure, and the gap between them."""
+    return Insight(
+        kind=f"budget_{budget_warnings.MERCHANT_ANOMALY}",
+        # Informational rather than a statement about the budget's position: the
+        # budget may be perfectly healthy and one merchant still out of line.
+        severity=WARNING,
+        title=f"{budget_name}: {anomaly.merchant} is unlike its own history",
+        detail=(
+            "Spending with this merchant this period is well outside what the "
+            "last few periods would predict. It may be a one-off, a price rise "
+            "or a mistake -- the ledger cannot tell which."
+        ),
+        evidence=(
+            Evidence("This period", anomaly.spent),
+            Evidence("Usually", anomaly.median),
+            Evidence("Difference", anomaly.deviation),
+            Evidence(
+                "Periods compared", None, detail=str(anomaly.observations)
+            ),
+        ),
+        action="Check the transactions for this merchant.",
+    )
+
+
 def budget_pace(session: Session, today: date) -> list[Insight]:
     """Budgets that are not going to make it, from the existing W1-W6 engine.
 
@@ -140,6 +166,18 @@ def budget_pace(session: Session, today: date) -> list[Insight]:
         for warning in result.warnings or ():
             if not warning.fired:
                 continue
+
+            # Warning (e) is per merchant, so it becomes one insight per merchant
+            # rather than one saying something is unusual without saying what.
+            # E2 wants evidence that supports the claim being made, and the
+            # budget's own totals do not support a claim about Tesco.
+            if warning.code == budget_warnings.MERCHANT_ANOMALY:
+                out.extend(
+                    _merchant_insight(result.budget_name, a)
+                    for a in result.merchant_anomalies
+                )
+                continue
+
             summary, detail = WARNING_TEXT.get(
                 warning.code, (warning.code.replace("_", " "), "")
             )

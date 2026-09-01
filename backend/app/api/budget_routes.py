@@ -21,13 +21,20 @@ from app.api.budget_schemas import (
     BudgetPeriodOut,
     BudgetRevisionIn,
     GoalSacrificeOut,
+    MerchantAnomalyOut,
     RecoveryOut,
     WarningOut,
 )
 from app.api.schemas import from_minor, to_minor
 from app.db import get_session
 from app.domain import budget_recovery
-from app.domain.budgets import BudgetPeriodResult, chain, current_period, enrich
+from app.domain.budgets import (
+    BudgetPeriodResult,
+    chain,
+    current_period,
+    enrich,
+    merchant_history,
+)
 from app.domain.clock import today as clock_today
 from app.domain.periods import period_for
 from app.models import Budget, BudgetRevision
@@ -111,6 +118,17 @@ def _period_out(r: BudgetPeriodResult) -> BudgetPeriodOut:
         warnings=[
             WarningOut(code=w.code, status=w.status, reason=w.reason)
             for w in r.warnings
+        ],
+        merchant_anomalies=[
+            MerchantAnomalyOut(
+                merchant=a.merchant,
+                spent_minor=to_minor(a.spent),
+                median_minor=to_minor(a.median),
+                deviation_minor=to_minor(a.deviation),
+                observations=a.observations,
+                robust_z=float(a.robust_z) if a.robust_z is not None else None,
+            )
+            for a in r.merchant_anomalies
         ],
         breakdown=[(label, to_minor(v)) for label, v in r.explain()],
     )
@@ -260,7 +278,11 @@ def budget_periods(
     budget = _get(session, budget_id)
     today = clock_today(session)
     results = chain(session, budget, upto or today, today)
-    return [_period_out(enrich(session, r, budget, today)) for r in results]
+    # One merchant fetch for the whole chain, not one per period.
+    merchants = merchant_history(session, budget, results)
+    return [
+        _period_out(enrich(session, r, budget, today, merchants)) for r in results
+    ]
 
 
 @router.get("/dashboard/budgets", response_model=list[BudgetPeriodOut])

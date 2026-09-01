@@ -1,5 +1,5 @@
 import { BudgetMeter, type Severity } from "@/components/BudgetMeter";
-import type { BudgetPeriod } from "@/lib/api";
+import type { BudgetPeriod, MerchantAnomaly } from "@/lib/api";
 import { formatMinor, formatSignedMinor } from "@/lib/money";
 
 /** Human copy for each warning code. The backend sends codes, never prose. */
@@ -16,7 +16,31 @@ const WARNING_COPY: Record<string, { label: string; tone: Tone }> = {
     label: "One expense materially changed the forecast",
     tone: "warning",
   },
+  merchant_anomaly: {
+    label: "A merchant is out of line with its own history",
+    tone: "warning",
+  },
 };
+
+/** Why a warning could not be computed, in words rather than a code. */
+const UNEVALUATED_REASON: Record<string, string> = {
+  insufficient_elapsed_period: "too early in the period to project",
+  insufficient_history: "needs three past periods to compare against",
+  no_merchant_spend: "nothing this period recorded a merchant",
+};
+
+/**
+ * A named merchant, not just "something is unusual".
+ *
+ * The whole point of this warning is which merchant and by how much — the
+ * baseline is what makes it checkable, so the usual figure is shown next to the
+ * actual one rather than left implied.
+ */
+function anomalyLabel(a: MerchantAnomaly): string {
+  return `${a.merchant}: ${formatMinor(a.spent_minor)} this period, usually ${formatMinor(
+    a.median_minor,
+  )} over ${a.observations} past periods`;
+}
 
 type Tone = "good" | "warning" | "serious" | "critical";
 
@@ -127,9 +151,19 @@ export function BudgetCard({ budget }: { budget: BudgetPeriod }) {
         <ul className="mt-4 space-y-1.5 border-t pt-3" style={{ borderColor: "var(--gridline)" }}>
           {fired.map((w) => {
             const copy = WARNING_COPY[w.code];
-            return copy ? (
-              <StatusBadge key={w.code} tone={copy.tone} label={copy.label} />
-            ) : null;
+            if (!copy) return null;
+            // One badge per merchant. A single line saying "a merchant is
+            // unusual" without naming it is not something anyone can act on.
+            if (w.code === "merchant_anomaly") {
+              return budget.merchant_anomalies.map((a) => (
+                <StatusBadge
+                  key={`${w.code}:${a.merchant}`}
+                  tone={copy.tone}
+                  label={anomalyLabel(a)}
+                />
+              ));
+            }
+            return <StatusBadge key={w.code} tone={copy.tone} label={copy.label} />;
           })}
           {unevaluated.map((w) => (
             <li
@@ -140,8 +174,9 @@ export function BudgetCard({ budget }: { budget: BudgetPeriod }) {
               <span aria-hidden>–</span>
               <span>
                 {WARNING_COPY[w.code]?.label ?? w.code}: not yet assessable
-                {w.reason === "insufficient_elapsed_period" &&
-                  " (too early in the period to project)"}
+                {w.reason && UNEVALUATED_REASON[w.reason]
+                  ? ` (${UNEVALUATED_REASON[w.reason]})`
+                  : ""}
               </span>
             </li>
           ))}

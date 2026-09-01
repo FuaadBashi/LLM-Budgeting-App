@@ -17,6 +17,7 @@ from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
+    AccountEditIn,
     AccountIn,
     BudgetImpactOut,
     AccountOut,
@@ -31,6 +32,7 @@ from app.api.schemas import (
     to_minor,
 )
 from app.db import get_session
+from app.domain.categories import apply_account_defaults
 from app.domain.classification import classify
 from app.domain.clock import today as clock_today
 from app.domain.impact import assess_transaction
@@ -52,17 +54,48 @@ router = APIRouter()
 # --------------------------------------------------------------------------
 
 
+def _account_out(account: Account, balance_minor: int) -> AccountOut:
+    return AccountOut(
+        id=account.id,
+        name=account.name,
+        kind=account.kind,
+        currency=account.currency,
+        balance_minor=balance_minor,
+        default_category_id=account.default_category_id,
+    )
+
+
+def _validate_default_category(
+    session: Session, account_kind: AccountKind, category_id: uuid.UUID | None
+) -> None:
+    """A default category is only read on expense legs, so refuse it elsewhere.
+
+    ``Spent`` is defined over expense-kind legs (invariant B1), which is the only
+    place ``apply_account_defaults`` has any effect. Storing one on a current
+    account would be accepted, never read, and would show in the UI as a setting
+    that does nothing -- accepted-and-ignored, which is the failure this codebase
+    returns 422 for rather than shipping.
+    """
+    if category_id is None:
+        return
+    if account_kind is not AccountKind.EXPENSE:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"a default category has no effect on a {account_kind.value} "
+                "account: it is only ever read when stamping an untagged expense "
+                "leg, which is what budget Spent is measured over"
+            ),
+        )
+    if session.get(Category, category_id) is None:
+        raise HTTPException(status_code=422, detail=f"unknown category {category_id}")
+
+
 @router.get("/accounts", response_model=list[AccountOut])
 def list_accounts(session: Session = Depends(get_session)) -> list[AccountOut]:
     balances = account_balances(session)
     return [
-        AccountOut(
-            id=a.id,
-            name=a.name,
-            kind=a.kind,
-            currency=a.currency,
-            balance_minor=to_minor(balances.get(a.id, from_minor(0))),
-        )
+        _account_out(a, to_minor(balances.get(a.id, from_minor(0))))
         for a in session.scalars(select(Account).order_by(Account.name))
     ]
 
@@ -71,21 +104,43 @@ def list_accounts(session: Session = Depends(get_session)) -> list[AccountOut]:
 def create_account(
     payload: AccountIn, session: Session = Depends(get_session)
 ) -> AccountOut:
+    _validate_default_category(session, payload.kind, payload.default_category_id)
     account = Account(
         name=payload.name,
         kind=payload.kind,
         currency=payload.currency,
         opening_balance=from_minor(payload.opening_balance_minor),
+        default_category_id=payload.default_category_id,
     )
     session.add(account)
     session.commit()
-    return AccountOut(
-        id=account.id,
-        name=account.name,
-        kind=account.kind,
-        currency=account.currency,
-        balance_minor=payload.opening_balance_minor,
-    )
+    return _account_out(account, payload.opening_balance_minor)
+
+
+@router.patch("/accounts/{account_id}", response_model=AccountOut)
+def edit_account(
+    account_id: uuid.UUID,
+    payload: AccountEditIn,
+    session: Session = Depends(get_session),
+) -> AccountOut:
+    """Set or clear an account's default category.
+
+    Changing it is forward-only: existing postings keep whatever category they
+    were stamped with, because re-deriving them would change what a closed period
+    meant. ``scripts/backfill_categories.py`` is the explicit, opt-in way to
+    apply a new default to history.
+    """
+    account = session.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+
+    if "default_category_id" in payload.model_fields_set:
+        _validate_default_category(session, account.kind, payload.default_category_id)
+        account.default_category_id = payload.default_category_id
+
+    session.commit()
+    balances = account_balances(session)
+    return _account_out(account, to_minor(balances.get(account.id, from_minor(0))))
 
 
 # --------------------------------------------------------------------------
@@ -156,6 +211,10 @@ def create_transaction(
             )
         )
     session.add(txn)
+    # Stamped here, on the write, so the category the budget measures is the one
+    # in force when the money moved. Applying it on read instead would silently
+    # recategorise closed periods every time an account default changed.
+    apply_account_defaults(session, txn.postings)
     try:
         session.commit()
     except DatabaseError as exc:

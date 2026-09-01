@@ -74,6 +74,28 @@ class WarningOut(BaseModel):
     reason: str | None = None
 
 
+class MerchantAnomalyOut(BaseModel):
+    """Evidence for the ``merchant_anomaly`` warning.
+
+    Typed rather than a free-form detail dict: the figures are money and have to
+    cross as minor units, and a warning that says "a merchant is out of line"
+    without naming which one is not something a person can act on.
+    """
+
+    merchant: str
+    spent_minor: int
+    #: The usual figure for this merchant. Quantised on the way out -- a median
+    #: over an even number of periods can land on a half-penny, and this is a
+    #: comparison figure rather than an allowance, so it rounds rather than floors.
+    median_minor: int
+    deviation_minor: int
+    observations: int
+    #: None when every observation was identical (MAD == 0) and the flat
+    #: threshold decided it. A z-score does not exist in that case, and inventing
+    #: one would report a 50p rise on a subscription as a 26-sigma event.
+    robust_z: float | None
+
+
 class BudgetPeriodOut(BaseModel):
     budget_id: uuid.UUID
     budget_name: str
@@ -108,6 +130,7 @@ class BudgetPeriodOut(BaseModel):
     projection_reason: str | None
 
     warnings: list[WarningOut]
+    merchant_anomalies: list[MerchantAnomalyOut]
     breakdown: list[tuple[str, int]]
 
 

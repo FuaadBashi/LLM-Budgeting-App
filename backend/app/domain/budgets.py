@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.domain.budget_warnings import evaluate
 from app.domain.categories import scope_ids
 from app.domain.disposable import compute_safe_to_spend
+from app.domain.merchant_baseline import BASELINE_PERIODS, MerchantHistory
 from app.domain.money import ZERO, floor_money
 from app.domain.periods import (
     CLOSED,
@@ -33,10 +34,15 @@ from app.domain.periods import (
     next_period,
     period_for,
     period_state,
+    prev_period,
 )
 from app.domain.projection import Projection, project
 from app.domain.reimbursement import netting_by_booking_date
-from app.domain.spend import spend_by_booking_date, total_between
+from app.domain.spend import (
+    merchant_spend_by_booking_date,
+    spend_by_booking_date,
+    total_between,
+)
 from app.models.enums import RolloverPolicy
 from app.models.planning import Budget, BudgetRevision
 
@@ -85,6 +91,11 @@ class BudgetPeriodResult:
     projection_reason: str | None = None
 
     warnings: list = field(default_factory=list)
+    #: Populated alongside the ``merchant_anomaly`` warning. Carried as its own
+    #: field rather than only inside the warning's detail so the API can type it:
+    #: a warning saying "a merchant is out of line" without naming which is not
+    #: an explanation, and section 8's warnings are supposed to cite evidence.
+    merchant_anomalies: list = field(default_factory=list)
 
     def explain(self) -> list[tuple[str, Decimal]]:
         return [
@@ -257,7 +268,16 @@ def current_period(
     results = chain(session, budget, today, today)
     if not results:
         return None
-    return enrich(session, results[-1], budget, today)
+    # results[-1:], not results: only the last period is enriched, so fetching
+    # merchant history for the whole chain would read years of rows to judge one
+    # month.
+    return enrich(
+        session,
+        results[-1],
+        budget,
+        today,
+        merchant_history(session, budget, results[-1:]),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -340,17 +360,45 @@ def _with_forgiven(r: BudgetPeriodResult, forgiven: Decimal) -> BudgetPeriodResu
     return BudgetPeriodResult(**{**r.__dict__, "rollover_forgiven": forgiven})
 
 
+def merchant_history(
+    session: Session, budget: Budget, results: list[BudgetPeriodResult]
+) -> MerchantHistory:
+    """Merchant totals covering every period in ``results`` and their baselines.
+
+    One query for the whole chain. Fetching per period instead would make the
+    budgets screen O(n) queries in its own history -- the exact cost :func:`chain`
+    is written to avoid, reintroduced by the warning that reads it.
+    """
+    if not results:
+        return MerchantHistory([])
+
+    earliest = Period(results[0].period_start, results[0].period_end)
+    for _ in range(BASELINE_PERIODS):
+        earliest = prev_period(budget.period, earliest, budget.anchor_date)
+
+    return MerchantHistory(
+        merchant_spend_by_booking_date(
+            session, budget.category_id, earliest.start, results[-1].period_end
+        )
+    )
+
+
 def enrich(
     session: Session,
     result: BudgetPeriodResult,
     budget: Budget,
     today: date,
+    merchants: MerchantHistory,
 ) -> BudgetPeriodResult:
     """Add projection, cash-capped allowance and warnings.
 
     Kept separate from :func:`chain` so the expensive parts run only for periods
     actually being displayed -- a projection for a closed period is meaningless,
     and the safe-to-spend lookup costs a query.
+
+    ``merchants`` is required rather than defaulted. A default of None would make
+    the merchant warning silently downgrade to ``not_evaluated`` for any caller
+    who forgot it, which is the quietest possible way to lose a warning.
     """
     category_ids = scope_ids(session, budget.category_id)
     p = Period(result.period_start, result.period_end)
@@ -376,6 +424,8 @@ def enrich(
         presented = min(result.base_allowance, cash_cap)
         binding = "safe_to_spend" if cash_cap < result.base_allowance else "remaining"
 
+    review = merchants.review(budget.period, p, budget.anchor_date)
+
     warnings = evaluate(
         period_kind=budget.period,
         allowance=result.allowance,
@@ -386,6 +436,7 @@ def enrich(
         projected_spend=projection.projected_spend,
         projection_reason=projection.reason,
         safe_to_spend=sts,
+        merchant_review=review,
     )
 
     return BudgetPeriodResult(
@@ -396,5 +447,6 @@ def enrich(
             "projected_spend": projection.projected_spend,
             "projection_reason": projection.reason,
             "warnings": warnings,
+            "merchant_anomalies": review.anomalies,
         }
     )

@@ -32,20 +32,23 @@ from app.models.ledger import Account, Category, Posting, Transaction
 
 ZERO = Decimal("0")
 
-def spend_by_booking_date(
+def _legs_in_scope(
     session: Session,
     category_id: uuid.UUID | None,
     start: date,
     end: date,
-) -> list[tuple[date, Decimal]]:
-    """Daily expense totals in scope, over ``[start, end]`` inclusive.
+    *columns,
+):
+    """The posting set every Spent-shaped query must agree on.
 
-    Returns only dates that actually have spend, which stays small even for a
-    multi-year daily budget.
+    Extracted rather than repeated. Two similar-looking queries over the same
+    money always drift, and the drift is silent -- a merchant baseline built from
+    a slightly different posting set would quote a history the budget never had,
+    then compare this period against it and call the difference an anomaly.
     """
     ids = scope_ids(session, category_id)
     query = (
-        select(Transaction.booking_date, func.sum(Posting.amount).label("total"))
+        select(*columns)
         .join(Transaction, Posting.transaction_id == Transaction.id)
         .join(Account, Posting.account_id == Account.id)
         .outerjoin(Category, Posting.category_id == Category.id)
@@ -65,11 +68,67 @@ def spend_by_booking_date(
         )
     else:
         query = query.where(Posting.category_id.in_(ids))
+    return query
 
+
+def spend_by_booking_date(
+    session: Session,
+    category_id: uuid.UUID | None,
+    start: date,
+    end: date,
+) -> list[tuple[date, Decimal]]:
+    """Daily expense totals in scope, over ``[start, end]`` inclusive.
+
+    Returns only dates that actually have spend, which stays small even for a
+    multi-year daily budget.
+    """
+    query = _legs_in_scope(
+        session,
+        category_id,
+        start,
+        end,
+        Transaction.booking_date,
+        func.sum(Posting.amount).label("total"),
+    )
     rows = session.execute(
         query.group_by(Transaction.booking_date).order_by(Transaction.booking_date)
     ).all()
     return [(r.booking_date, r.total or ZERO) for r in rows]
+
+
+def merchant_spend_by_booking_date(
+    session: Session,
+    category_id: uuid.UUID | None,
+    start: date,
+    end: date,
+) -> list[tuple[str, date, Decimal]]:
+    """The same totals as :func:`spend_by_booking_date`, split by merchant.
+
+    Bucketing into periods happens in Python, not here. SQL can group by month,
+    but not by a fortnight measured from an arbitrary anchor, and ``EXTRACT(DOW)``
+    is Sunday-based where ``date.weekday()`` is Monday-based -- so a SQL-side
+    grouping would be right for two of the six period kinds and quietly wrong for
+    the rest.
+
+    Rows with no merchant are dropped: "who was this with?" has no answer for
+    them, and a single unnamed bucket would pool every untagged expense into one
+    fictional merchant whose spend is anomalous every period.
+    """
+    query = _legs_in_scope(
+        session,
+        category_id,
+        start,
+        end,
+        Transaction.merchant,
+        Transaction.booking_date,
+        func.sum(Posting.amount).label("total"),
+    ).where(Transaction.merchant.is_not(None))
+    rows = session.execute(
+        query.group_by(Transaction.merchant, Transaction.booking_date).order_by(
+            Transaction.booking_date
+        )
+    ).all()
+    return [(r.merchant, r.booking_date, r.total or ZERO) for r in rows]
 
 
 def total_between(

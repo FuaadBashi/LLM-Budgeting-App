@@ -32,6 +32,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.categories import apply_account_defaults
 from app.domain.money import ZERO
 from app.models.enums import AccountKind, CandidateStatus, TransactionStatus
 from app.models.imports import ImportBatch, ImportCandidate
@@ -515,15 +516,18 @@ def accept(
             currency="GBP",
         )
     )
-    session.add(
-        Posting(
-            transaction_id=transaction.id,
-            account_id=counter.id,
-            amount=-candidate.amount,
-            currency="GBP",
-            category_id=category_id or candidate.suggested_category_id,
-        )
+    counter_leg = Posting(
+        transaction_id=transaction.id,
+        account_id=counter.id,
+        amount=-candidate.amount,
+        currency="GBP",
+        category_id=category_id or candidate.suggested_category_id,
     )
+    session.add(counter_leg)
+    # An import is where untagged contractual spending actually arrives, so the
+    # account default has to reach this path too. It only fires when neither the
+    # user nor the suggestion cache named a category.
+    apply_account_defaults(session, [counter_leg])
 
     candidate.status = CandidateStatus.ACCEPTED
     candidate.transaction_id = transaction.id

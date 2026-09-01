@@ -145,6 +145,12 @@ def _apply(session: Session, payload: dict) -> RestoreResult:
                 currency=row.get("currency", "GBP"),
                 opening_balance=_decimal(row.get("opening_balance", "0"), "opening_balance"),
                 active=row.get("active", True),
+                apr=_decimal(row["apr"], "apr") if row.get("apr") else None,
+                minimum_payment=(
+                    _decimal(row["minimum_payment"], "minimum payment")
+                    if row.get("minimum_payment")
+                    else None
+                ),
             )
         )
     session.flush()
@@ -172,8 +178,24 @@ def _apply(session: Session, payload: dict) -> RestoreResult:
             raise RestoreError("category parents form a cycle or reference unknown ids")
     session.flush()
 
+    # Account defaults are linked after the categories exist. Setting them on the
+    # account insert above would dangle the FK, because accounts are written
+    # first -- they are what the postings point at.
+    for row in payload["accounts"]:
+        default = row.get("default_category_id")
+        if default:
+            session.get(Account, uuid.UUID(row["id"])).default_category_id = (
+                uuid.UUID(default)
+            )
+    session.flush()
+
     # Transactions before their reverses/reimburses links resolve, so the FKs are
     # set in a second pass.
+    #
+    # Deliberately no `apply_account_defaults` here. A restore reproduces a file,
+    # it does not re-decide anything: a posting that was uncategorised when the
+    # backup was taken must come back uncategorised, or X17 -- restore yields
+    # identical figures -- stops holding the moment an account gains a default.
     links: list[tuple[uuid.UUID, str, str]] = []
     posting_count = 0
     for row in payload["transactions"]:
