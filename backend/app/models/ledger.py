@@ -42,6 +42,17 @@ class Account(TimestampedUUID, Base):
     )
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # Debt terms, for the payoff engine. Both nullable, and nullable is the point:
+    # most accounts have no terms at all, and a liability whose terms are not
+    # recorded yet is a real state. Defaulting either to zero would assert an
+    # interest-free loan with nothing compulsory to pay, which is a claim the
+    # user never made.
+    #
+    # The APR is a fraction, not a percentage: 0.199000 is 19.9%. Rates need more
+    # decimal places than amounts do, so this is deliberately not the Money type.
+    apr: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
+    minimum_payment: Mapped[Decimal | None] = mapped_column(Money, nullable=True)
+
     postings: Mapped[list[Posting]] = relationship(back_populates="account")
 
     def __repr__(self) -> str:

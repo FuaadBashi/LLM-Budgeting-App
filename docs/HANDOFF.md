@@ -288,6 +288,10 @@ These are bugs already found and fixed. They will come back if the reasoning is 
   literally. Occurrences come from the rule. The column is `first_expected_date`, an anchor.
 - **A budget edit must append a `BudgetRevision`, never mutate one.** Mutating rewrites history:
   a £300→£400 change moved an eight-month chain's answer from £390 to £1,090.
+- **A PATCH field that is not optional is a field every edit overwrites.** `rollover_reset` was
+  `bool = False`, so bumping an amount resent `false` and silently un-forgave an overspend
+  written off earlier in the same period. Partial-update fields are `T | None = None`, applied
+  only when not None. `test_rollover_reset.py` pins it.
 
 ---
 

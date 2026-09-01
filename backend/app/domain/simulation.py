@@ -50,11 +50,14 @@ def _from_minor(value) -> Decimal:
     return Decimal(int(value or 0)) / 100
 
 
-def _add_months(d: date, n: int) -> date:
+def add_months(d: date, n: int) -> date:
     """Month arithmetic on the (year, month) ordinal, clamping the day.
 
     The same rule the budget engine uses: stepping a date directly ratchets
     downward once it clamps in February and never recovers.
+
+    Public because the debt engine projects month by month too, and a second
+    copy of this is a second chance to reintroduce the ratchet.
     """
     index = d.year * 12 + (d.month - 1) + n
     year, month = index // 12, index % 12 + 1
@@ -180,7 +183,7 @@ def run(session: Session, scenario: Scenario) -> ScenarioResult:
     lowest_month = scenario.baseline_date
 
     for n in range(scenario.horizon_months):
-        when = _add_months(scenario.baseline_date, n)
+        when = add_months(scenario.baseline_date, n)
         years = Decimal(n) / 12
 
         # Growth compounds annually but is applied smoothly, so a 3% raise does
@@ -312,7 +315,7 @@ def _goal_projections(
             months_to = int((remaining / share).to_integral_value(rounding="ROUND_CEILING"))
 
         completion = (
-            _add_months(baseline_date, months_to)
+            add_months(baseline_date, months_to)
             if months_to is not None and baseline_date is not None
             else None
         )

@@ -23,6 +23,7 @@ from app.models import (
     RolloverPolicy,
     TransactionStatus,
 )
+from app.domain.clock import today as clock_today
 from tests.conftest import post
 
 
@@ -161,9 +162,41 @@ def test_unknown_or_unposted_transactions_are_ignored(session, accounts, budget)
 # --------------------------------------------------------------------------
 
 
-def test_create_transaction_returns_the_budget_impact(client, session, accounts, budget):
+def test_create_transaction_returns_the_budget_impact(client, session, accounts):
+    """The route has no as-of parameter -- it asks the clock.
+
+    So this test builds its own budget covering *today* rather than reusing the
+    August fixture its siblings use. Those siblings pass an explicit date to
+    `assess_transaction`; this one cannot, because it goes through the route.
+
+    Pinned to the clock deliberately: the previous version booked 2026-08-28
+    against an August budget and passed for exactly as long as the calendar said
+    August. It began failing on 1 September, having tested nothing about the code
+    that changed. A test whose result depends on the day it is run is a test that
+    will eventually lie in whichever direction is least convenient.
+    """
+    today = clock_today(session)
+    period_start = today.replace(day=1)
+
+    live = Budget(
+        name="Discretionary",
+        period=BudgetPeriod.MONTHLY,
+        start_date=period_start,
+    )
+    session.add(live)
+    session.flush()
+    session.add(
+        BudgetRevision(
+            budget_id=live.id,
+            effective_from=period_start,
+            amount=Decimal("600"),
+            rollover_policy=RolloverPolicy.NONE,
+        )
+    )
+    session.commit()
+
     body = {
-        "booking_date": "2026-08-28",
+        "booking_date": today.isoformat(),
         "description": "Big one",
         "postings": [
             {"account_id": str(accounts["current"].id), "amount_minor": -5000},

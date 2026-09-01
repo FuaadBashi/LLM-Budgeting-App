@@ -153,7 +153,12 @@ def revise_budget(
     payload: BudgetRevisionIn,
     session: Session = Depends(get_session),
 ) -> BudgetOut:
-    """Append a revision. Never mutates history."""
+    """Append a revision. Never mutates history.
+
+    A revision is the plan in force from a date (invariant B8), not a form
+    submission: an edit changes the fields it names and leaves the rest as they
+    were.
+    """
     budget = _get(session, budget_id)
     today = clock_today(session)
 
@@ -174,7 +179,8 @@ def revise_budget(
             existing.rollover_policy = payload.rollover_policy
         if payload.active is not None:
             existing.active = payload.active
-        existing.rollover_reset = payload.rollover_reset
+        if payload.rollover_reset is not None:
+            existing.rollover_reset = payload.rollover_reset
     else:
         session.add(
             BudgetRevision(
@@ -186,8 +192,23 @@ def revise_budget(
                     if payload.rollover_policy is not None
                     else (previous.rollover_policy if previous else None)
                 ),
-                active=payload.active if payload.active is not None else True,
-                rollover_reset=payload.rollover_reset,
+                # Inherited like the policy above it, not defaulted to True: a
+                # pause is a standing setting, so an edit that says nothing about
+                # it must not resume the budget. Defaulting to True made an
+                # amount change silently un-pause a paused budget, and the
+                # engine drops paused periods from the chain entirely -- the
+                # months would reappear with their carry.
+                active=(
+                    payload.active
+                    if payload.active is not None
+                    else (previous.active if previous else True)
+                ),
+                # False, not inherited from the previous revision -- unlike the
+                # policy above it. A reset is an instruction about one boundary
+                # ("write off what is carried in here"), already honoured. Carried
+                # forward it would re-fire at every later revision and quietly
+                # discard the surpluses earned since the write-off.
+                rollover_reset=bool(payload.rollover_reset),
             )
         )
     try:

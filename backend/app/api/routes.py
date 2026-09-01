@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from app.api.schemas import (
     NetWorthOut,
     PostingOut,
     SafeToSpendOut,
+    TransactionEditIn,
     TransactionIn,
     TransactionOut,
     from_minor,
@@ -41,7 +42,7 @@ from app.models import (
     Transaction,
     TransactionStatus,
 )
-from app.models.enums import LIQUID_KINDS
+from app.models.enums import LIQUID_KINDS, AccountKind
 
 router = APIRouter()
 
@@ -118,6 +119,7 @@ def _to_out(txn: Transaction, kinds: dict) -> TransactionOut:
         merchant=txn.merchant,
         status=txn.status,
         cash_effect_minor=to_minor(cash_effect),
+        edited=txn.updated_at > txn.created_at,
         classification=classify(txn, kinds),
         postings=[
             PostingOut(
@@ -230,6 +232,111 @@ def void_transaction(
         raise HTTPException(status_code=422, detail=str(exc.orig)) from exc
 
     kinds = {a.id: a.kind for a in session.scalars(select(Account))}
+    return _to_out(txn, kinds)
+
+
+#: Refused by name rather than dropped. Naming them lets the reply say what to do
+#: instead, which an unknown-key rejection cannot.
+MONETARY_FIELDS = ("amount", "amount_minor", "booking_date", "postings")
+EDITABLE_FIELDS = ("description", "merchant", "category_id")
+
+
+@router.patch("/transactions/{transaction_id}", response_model=TransactionOut)
+def edit_transaction(
+    transaction_id: uuid.UUID,
+    payload: TransactionEditIn,
+    session: Session = Depends(get_session),
+) -> TransactionOut:
+    """Correct a non-monetary field in place. Rulebook section 2.
+
+    Money is corrected by void-and-reissue, everything else by editing. Voiding a
+    typo is not a smaller version of the right answer, it is a different claim:
+    it writes an audit entry saying the money was wrong, breaks the reverses_id
+    and reimburses_id links, drops any obligation-fulfilment match so a paid bill
+    reappears as unpaid, and leaves the row duplicated in the list for ever.
+
+    A category edit does move a number -- budget ``Spent`` -- but a derived one,
+    recomputed from postings on every read, so the new answer is as honest as the
+    old one. An amount is a recorded number, which is why it is refused here.
+    """
+    sent = payload.model_fields_set
+
+    txn = session.get(Transaction, transaction_id)
+    if txn is None:
+        raise HTTPException(status_code=404, detail="transaction not found")
+    if txn.status == TransactionStatus.VOIDED:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "a voided transaction is not a live record and cannot be edited; "
+                "enter a replacement instead"
+            ),
+        )
+
+    refused = [f for f in MONETARY_FIELDS if f in sent]
+    if refused:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{', '.join(refused)} cannot be edited. A wrong amount or date is "
+                "corrected by voiding this transaction "
+                f"(POST /api/transactions/{transaction_id}/void) and entering a new "
+                "one, so the ledger records that the money itself was wrong."
+            ),
+        )
+
+    kinds = {a.id: a.kind for a in session.scalars(select(Account))}
+
+    if "category_id" in sent:
+        # Expense-kind legs, not category-tagged ones: Spent is defined that way
+        # (invariant B1), so this is the same set the budget will measure.
+        expense_legs = [
+            p for p in txn.postings if kinds.get(p.account_id) == AccountKind.EXPENSE
+        ]
+        if not expense_legs:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "this transaction has no expense leg, so there is nothing for a "
+                    "category to describe -- a transfer or savings movement is not "
+                    "spending"
+                ),
+            )
+        if len(expense_legs) > 1:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"this transaction has {len(expense_legs)} expense legs, so one "
+                    "category_id does not say which of them to recategorise; "
+                    "re-enter the split rather than have the server choose"
+                ),
+            )
+        if (
+            payload.category_id is not None
+            and session.get(Category, payload.category_id) is None
+        ):
+            raise HTTPException(
+                status_code=422, detail=f"unknown category {payload.category_id}"
+            )
+        expense_legs[0].category_id = payload.category_id
+
+    if "description" in sent:
+        txn.description = payload.description
+    if "merchant" in sent:
+        txn.merchant = payload.merchant
+
+    if any(f in sent for f in EDITABLE_FIELDS):
+        # The mixin's onupdate only fires when the transactions row itself is
+        # dirty, and a category edit writes to a posting. Without this an edit
+        # that moved budget Spent would report itself as never having happened.
+        txn.updated_at = func.now()
+
+    try:
+        session.commit()
+    except DatabaseError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc.orig)) from exc
+
     return _to_out(txn, kinds)
 
 

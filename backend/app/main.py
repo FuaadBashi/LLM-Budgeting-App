@@ -6,7 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.allocation_routes import router as allocation_router
 from app.api.backup_routes import router as backup_router
+from app.api.debt_routes import router as debt_router
 from app.api.budget_routes import router as budget_router
 from app.api.auth_routes import router as auth_router
 from app.api.export_routes import router as export_router
@@ -86,6 +88,8 @@ app.include_router(scenario_router, prefix="/api", dependencies=[Depends(require
 app.include_router(import_router, prefix="/api", dependencies=[Depends(require_session)])
 app.include_router(insight_router, prefix="/api", dependencies=[Depends(require_session)])
 app.include_router(backup_router, prefix="/api", dependencies=[Depends(require_session)])
+app.include_router(debt_router, prefix="/api", dependencies=[Depends(require_session)])
+app.include_router(allocation_router, prefix="/api", dependencies=[Depends(require_session)])
 
 
 

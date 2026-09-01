@@ -47,7 +47,10 @@ class BudgetRevisionIn(BaseModel):
     amount_minor: int = Field(ge=0)
     rollover_policy: RolloverPolicy | None = None
     active: bool | None = None
-    rollover_reset: bool = False
+    #: Optional, like the two fields above it: None means "leave it alone". A
+    #: plain ``False`` default made every edit resend it, so bumping an amount
+    #: silently un-forgave an overspend written off earlier in the same period.
+    rollover_reset: bool | None = None
     #: Defaults to the start of the period containing today, so a closed period is
     #: never rewritten by accident.
     effective_from: date | None = None

@@ -11,6 +11,8 @@ import uuid
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import (
@@ -87,6 +89,44 @@ class TransactionIn(BaseModel):
         return v
 
 
+class TransactionEditIn(BaseModel):
+    """A non-monetary correction, rulebook section 2.
+
+    Money is corrected by void-and-reissue; everything else by editing. Voiding a
+    typo says the money was wrong, which is a different and false claim.
+
+    Every key is declared, and unknown ones are rejected, because the failure this
+    endpoint must not have is accepting a payload and applying part of it: a UI
+    that gets a 200 shows the user a saved value the ledger never took.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str | None = None
+    merchant: str | None = None
+    #: Category lives on Posting, not Transaction, so this is applied to the
+    #: transaction's expense leg. Null clears it -- untagged spend is a real
+    #: state, reported by its own breakdown term.
+    category_id: uuid.UUID | None = None
+
+    #: Declared only so the route can refuse them by name and say what to do
+    #: instead. Left undeclared they would be rejected as unknown keys, which
+    #: tells a caller that the field is misspelt rather than forbidden.
+    amount: Any = None
+    amount_minor: int | None = None
+    booking_date: date | None = None
+    postings: Any = None
+
+    @field_validator("description")
+    @classmethod
+    def description_is_not_null(cls, v: str | None) -> str:
+        # The column is NOT NULL with a "" default, unlike merchant. Sending null
+        # would otherwise fail at the database as a 500.
+        if v is None:
+            raise ValueError("description cannot be null; send \"\" to clear it")
+        return v
+
+
 class PostingOut(BaseModel):
     id: uuid.UUID
     account_id: uuid.UUID
@@ -115,6 +155,11 @@ class TransactionOut(BaseModel):
     status: TransactionStatus
     #: The net movement across liquid accounts -- what the transaction did to cash.
     cash_effect_minor: int
+    #: Whether the row has changed since it was written, from the audit
+    #: timestamps the mixin already keeps -- no column and no table added for it.
+    #: A void also touches the row, so a voided transaction reads as edited; it
+    #: carries `status` to say so.
+    edited: bool
     #: Populated on create. Empty when no budget's allowance moved.
     budget_impacts: list[BudgetImpactOut] = []
 
