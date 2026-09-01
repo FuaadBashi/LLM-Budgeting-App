@@ -1,7 +1,21 @@
 import type { Minor } from "./money";
 
+/**
+ * Where the API lives, which differs by who is asking.
+ *
+ * In the browser it is a **relative** path, proxied to the backend by the
+ * rewrite in next.config.ts. That is what makes the app work from a phone: an
+ * absolute `http://localhost:8000` means *the phone* once the page is opened on
+ * one, and every request fails. Same-origin also means the session cookie needs
+ * no CORS allowance and no cross-site exemption.
+ *
+ * On the server there is no proxy to go through — the Next process and the API
+ * are on the same machine — so it addresses the backend directly.
+ */
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+  typeof window === "undefined"
+    ? (process.env.API_INTERNAL_URL ?? "http://localhost:8000/api")
+    : (process.env.NEXT_PUBLIC_API_URL ?? "/api");
 const BASE = API_BASE;
 
 export interface SafeToSpend {
