@@ -435,13 +435,25 @@ def stage(
     try:
         from app.domain import enrichment
 
+        flagged: dict[str, str] = {}
         suggestions = enrichment.resolve(
-            session, [row.description for row in rows]
+            session, [row.description for row in rows], flagged=flagged
         )
         for row in rows:
-            category_id = suggestions.get(normalise_description(row.description))
+            key = normalise_description(row.description)
+            candidate = by_row[row.row_number]
+            category_id = suggestions.get(key)
             if category_id is not None:
-                by_row[row.row_number].suggested_category_id = category_id
+                candidate.suggested_category_id = category_id
+            # A second opinion disagreed with the first guess -- worth a
+            # person's eye this run, not just a silently blank category.
+            if key in flagged:
+                candidate.raw = {
+                    **candidate.raw,
+                    "verification_note": (
+                        f"A second look didn't agree this was {flagged[key]}."
+                    ),
+                }
     except Exception as exc:  # noqa: BLE001
         import logging
 

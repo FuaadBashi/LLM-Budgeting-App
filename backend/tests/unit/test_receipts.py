@@ -300,6 +300,48 @@ def test_a_reader_without_verify_does_not_crash_staging(session, accounts):
     assert candidate.id is not None
 
 
+class _FakeCategorySuggester:
+    """A minimal enrichment.Suggester for exercising the category-verification
+    path from inside a receipt upload, without touching test_enrichment.py."""
+
+    model = "fake"
+
+    def __init__(self, answers, verdicts):
+        self.answers = answers
+        self.verdicts = verdicts
+
+    def suggest(self, descriptions, categories):
+        return {d: self.answers.get(d) for d in descriptions if d in self.answers}
+
+    def verify(self, picks):
+        return {d: v for d, v in self.verdicts.items() if d in picks}
+
+
+def test_a_flagged_category_guess_appends_to_the_verification_note(
+    session, accounts, categories, monkeypatch
+):
+    """A disagreement on the receipt's suggested category is surfaced the
+    same way a disagreement on the amount is -- appended, not overwritten,
+    since the image read may have already left its own note here."""
+    from app.domain import enrichment
+
+    fake = _FakeCategorySuggester(
+        {"DISHOOM": "Restaurants"}, verdicts={"DISHOOM": False}
+    )
+    monkeypatch.setattr(enrichment, "build_suggester", lambda: fake)
+
+    reader = FakeReader(
+        a_receipt(merchant="DISHOOM"),
+        receipts.ReceiptVerification(matches=False, note="total looks off"),
+    )
+    candidate = stage(session, accounts, reader)
+
+    note = candidate.raw["verification_note"]
+    assert "total looks off" in note
+    assert "didn't agree" in note
+    assert candidate.suggested_category_id is None
+
+
 def test_a_failing_verification_call_does_not_fail_the_upload(session, accounts):
     class ExplodingVerifyReader(FakeReader):
         def verify(self, image, media_type, read):

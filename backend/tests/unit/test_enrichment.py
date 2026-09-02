@@ -180,6 +180,28 @@ def test_an_import_works_normally_with_no_suggestions(client, accounts, session)
     assert all(row.suggested_category_id is None for row in rows)
 
 
+def test_a_flagged_statement_row_gets_a_verification_note(
+    session, accounts, categories, monkeypatch
+):
+    """importing.stage() surfaces a second-opinion disagreement on the row
+    itself -- not just a silently blank category."""
+    fake = FakeSuggester(
+        {"TESCO STORES 3421": "Groceries"},
+        verdicts={"TESCO STORES 3421": False},
+    )
+    monkeypatch.setattr(enrichment, "build_suggester", lambda: fake)
+    from app.domain import importing
+
+    importing.stage(
+        session, filename="s.csv", content=ISO, account_id=accounts["current"].id
+    )
+    tesco = session.scalars(
+        select(ImportCandidate).where(ImportCandidate.description.like("TESCO%"))
+    ).one()
+    assert "didn't agree" in tesco.raw["verification_note"]
+    assert tesco.suggested_category_id is None
+
+
 def test_a_failing_suggester_does_not_fail_the_import(
     session, accounts, categories, monkeypatch
 ):
@@ -425,8 +447,48 @@ def test_an_explicit_disagreement_downgrades_the_pick_to_null(session, categorie
     )
     assert enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake) == {}
 
-    row = session.scalars(select(MerchantSuggestion)).one()
-    assert row.category_id is None, "a downgraded pick must not reach the cache either"
+
+def test_a_downgraded_pick_is_not_cached_at_all(session, categories):
+    """Unlike a first-pass null, a disagreement is not settled on forever --
+    nothing is written, so the merchant is a genuine miss again next time."""
+    fake = FakeSuggester(
+        {"TESCO STORES 3421": "Groceries"},
+        verdicts={"TESCO STORES 3421": False},
+    )
+    enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake)
+    assert session.scalars(select(MerchantSuggestion)).all() == []
+
+
+def test_a_downgraded_merchant_is_asked_about_again_next_time(session, categories):
+    """The whole point of not caching a disagreement: a second import for the
+    same merchant is a genuine miss, not a repeat question paid for twice."""
+    fake = FakeSuggester(
+        {"TESCO STORES 3421": "Groceries"},
+        verdicts={"TESCO STORES 3421": False},
+    )
+    enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake)
+    enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake)
+    assert len(fake.calls) == 2, "a downgraded pick must be asked again, not remembered as null"
+
+
+def test_a_downgraded_pick_is_named_in_the_flagged_output(session, categories):
+    fake = FakeSuggester(
+        {"TESCO STORES 3421": "Groceries"},
+        verdicts={"TESCO STORES 3421": False},
+    )
+    flagged: dict[str, str] = {}
+    enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake, flagged=flagged)
+    assert flagged == {normalise_description("TESCO STORES 3421"): "Groceries"}
+
+
+def test_an_agreeing_pick_is_not_in_the_flagged_output(session, categories):
+    fake = FakeSuggester(
+        {"TESCO STORES 3421": "Groceries"},
+        verdicts={"TESCO STORES 3421": True},
+    )
+    flagged: dict[str, str] = {}
+    enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake, flagged=flagged)
+    assert flagged == {}
 
 
 def test_an_explicit_agreement_keeps_the_pick(session, categories):

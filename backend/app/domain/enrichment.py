@@ -346,12 +346,21 @@ def resolve(
     descriptions: list[str],
     *,
     suggester: Suggester | None = None,
+    flagged: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Categories for these descriptions, cache first.
 
     Returns `{normalised_key: category_id}`, omitting anything unresolved. Only
     genuine misses reach the model, which is the entire cost story: after the
     first few weeks nearly every import is answered from the table.
+
+    A pick the second opinion disagrees with is deliberately NOT written to the
+    cache -- unlike a first-pass null, which the model is confident enough to
+    call an answer, a downgraded pick means the two passes disagreed, which is
+    exactly the situation worth asking about again rather than settling on
+    forever. If `flagged` is given, its normalised key is added with the
+    rejected category's name, so a caller can point a person at it this run too
+    rather than only ever showing a blank field.
     """
     suggester = suggester if suggester is not None else build_suggester()
 
@@ -413,7 +422,9 @@ def resolve(
         for description, category in picked.items():
             key = normalise_description(description)
             if category is not None and confirmed.get(description) is False:
-                category = None
+                if flagged is not None:
+                    flagged[key] = category.name
+                continue  # not cached: ask again next time, not settled on null
             remember(
                 session,
                 misses[key],

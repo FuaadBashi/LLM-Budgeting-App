@@ -479,10 +479,21 @@ def stage(
     try:
         from app.domain import enrichment
 
-        suggestions = enrichment.resolve(session, [description])
-        candidate.suggested_category_id = suggestions.get(
-            importing.normalise_description(description)
+        key = importing.normalise_description(description)
+        category_flagged: dict[str, str] = {}
+        suggestions = enrichment.resolve(
+            session, [description], flagged=category_flagged
         )
+        candidate.suggested_category_id = suggestions.get(key)
+        if key in category_flagged:
+            # Appended, not overwritten -- the image read may already have
+            # left its own note here, and both are worth a second look.
+            note = f"A second look didn't agree this was {category_flagged[key]}."
+            existing = candidate.raw.get("verification_note") or ""
+            candidate.raw = {
+                **candidate.raw,
+                "verification_note": f"{existing} {note}".strip(),
+            }
     except Exception as exc:  # noqa: BLE001
         log.warning("category suggestion skipped for receipt: %s", exc)
 
