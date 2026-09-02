@@ -59,6 +59,18 @@ Categories:
 Descriptions:
 {descriptions}"""
 
+#: A second, independent pass over the first pass's own picks -- checking a
+#: specific claim is a different task from open-ended naming, so this is not
+#: the same deterministic call repeated for nothing.
+VERIFY_PROMPT = """You are checking another model's category guesses for bank transaction descriptions.
+
+Reply with JSON only: an object mapping each description to true if the given
+category is a reasonable fit, or false if it clearly is not. When unsure,
+answer false -- a wrong category costs the user more than a missed suggestion.
+
+Guesses:
+{guesses}"""
+
 
 @dataclass(frozen=True)
 class Suggestion:
@@ -76,6 +88,13 @@ class Suggester(Protocol):
         self, descriptions: list[str], categories: list[str]
     ) -> dict[str, str | None]: ...
 
+    def verify(self, picks: dict[str, str]) -> dict[str, bool]:
+        """A second opinion on `{description: category_name}` picks already
+        resolved to a real category. Omitting a description (or returning {})
+        means no opinion was formed, not that it was confirmed -- resolve()
+        only ever downgrades on an explicit False."""
+        ...
+
 
 class NullSuggester:
     """A3. What runs when no provider is chosen: nothing, quietly."""
@@ -85,6 +104,9 @@ class NullSuggester:
     def suggest(
         self, descriptions: list[str], categories: list[str]
     ) -> dict[str, str | None]:
+        return {}
+
+    def verify(self, picks: dict[str, str]) -> dict[str, bool]:
         return {}
 
 
@@ -120,6 +142,22 @@ class OpenAICompatibleSuggester:
             log.warning("suggestion request failed: %s", exc)
             return {}
         return _parse(text)
+
+    def verify(self, picks: dict[str, str]) -> dict[str, bool]:
+        if not picks:
+            return {}
+        try:
+            text = providers.chat(
+                base_url=self._base_url,
+                api_key=self._key,
+                model=self.model,
+                prompt=_verify_prompt(picks),
+                max_tokens=self._max_tokens,
+            )
+        except providers.ProviderError as exc:
+            log.warning("verification request failed: %s", exc)
+            return {}
+        return _parse_verification(text)
 
 
 class ClaudeSuggester:
@@ -159,6 +197,59 @@ class ClaudeSuggester:
 
         return _parse(text)
 
+    def verify(self, picks: dict[str, str]) -> dict[str, bool]:
+        if not picks:
+            return {}
+        try:
+            import anthropic
+        except ImportError:  # pragma: no cover -- optional dependency
+            return {}
+
+        client = anthropic.Anthropic(api_key=self._key)
+        try:
+            reply = client.messages.create(
+                model=self.model,
+                max_tokens=self._max_tokens,
+                messages=[{"role": "user", "content": _verify_prompt(picks)}],
+            )
+            text = "".join(
+                block.text for block in reply.content if block.type == "text"
+            )
+        except Exception as exc:  # noqa: BLE001 -- a second opinion is never critical
+            log.warning("verification request failed: %s", exc)
+            return {}
+        return _parse_verification(text)
+
+
+def _verify_prompt(picks: dict[str, str]) -> str:
+    return VERIFY_PROMPT.format(
+        guesses="\n".join(f"- {d}: {c}" for d, c in picks.items())
+    )
+
+
+def _parse_verification(text: str) -> dict[str, bool]:
+    """Read a verify() reply. Anything unparseable is an empty opinion, same
+    as `_parse` -- a failed check must not block the original suggestion."""
+    parsed = _parse_json_object(text)
+    if parsed is None:
+        log.warning("could not parse verification reply")
+        return {}
+    return {str(k): bool(v) for k, v in parsed.items()}
+
+
+def _parse_json_object(text: str) -> dict | None:
+    """Shared fence-stripping so `_parse` and `_parse_verification` cannot
+    drift on what "unparseable" means."""
+    body = text.strip()
+    if body.startswith("```"):
+        body = body.split("```")[1] if "```" in body[3:] else body[3:]
+        body = body.removeprefix("json").strip()
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, IndexError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
 
 def _parse(text: str) -> dict[str, str | None]:
     """Read the reply, forgiving the usual wrappers.
@@ -168,16 +259,9 @@ def _parse(text: str) -> dict[str, str | None]:
     empty result -- never an exception, because a failed suggestion must not
     fail an import.
     """
-    body = text.strip()
-    if body.startswith("```"):
-        body = body.split("```")[1] if "```" in body[3:] else body[3:]
-        body = body.removeprefix("json").strip()
-    try:
-        parsed = json.loads(body)
-    except (json.JSONDecodeError, IndexError):
+    parsed = _parse_json_object(text)
+    if parsed is None:
         log.warning("could not parse suggestion reply")
-        return {}
-    if not isinstance(parsed, dict):
         return {}
     return {
         str(k): (str(v) if v is not None else None) for k, v in parsed.items()
@@ -298,14 +382,38 @@ def resolve(
         answers = suggester.suggest(
             [misses[k] for k in chunk], [c.name for c in categories]
         )
+
         # Answers come back keyed by the description we sent, not the key.
+        # A1: only a name already on the list can become a category here --
+        # anything else (an invented category, a sentence, a number) is
+        # already None before verification ever sees it.
+        picked: dict[str, object] = {}
         for description, name in answers.items():
             key = normalise_description(description)
             if key not in misses:
                 continue
-            # A1: only a name already on the list can become a category. Anything
-            # else -- an invented category, a sentence, a number -- lands as None.
-            category = by_name.get((name or "").strip().lower())
+            picked[description] = by_name.get((name or "").strip().lower())
+
+        # A second, independent pass over this batch's own picks -- checking
+        # a specific claim is a different question from open-ended naming, so
+        # it catches plausible-but-wrong guesses the first pass would not
+        # doubt itself. Only ever narrows to null: a provider that cannot
+        # verify (NullSuggester, an old Suggester without verify(), a failed
+        # call) returns {}, and an absent opinion keeps the original pick --
+        # only an explicit False demotes one, matching "prefer null" applied
+        # twice rather than once.
+        verify_input = {d: c.name for d, c in picked.items() if c is not None}
+        confirmed: dict[str, bool] = {}
+        if verify_input:
+            try:
+                confirmed = suggester.verify(verify_input)
+            except Exception as exc:  # noqa: BLE001 -- a second opinion is never critical
+                log.warning("category verification skipped: %s", exc)
+
+        for description, category in picked.items():
+            key = normalise_description(description)
+            if category is not None and confirmed.get(description) is False:
+                category = None
             remember(
                 session,
                 misses[key],

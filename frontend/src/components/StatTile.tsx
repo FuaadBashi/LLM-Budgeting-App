@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { formatMinor, type Minor } from "@/lib/money";
+import { AnimatedAmount } from "@/components/AnimatedAmount";
+import type { Minor } from "@/lib/money";
 
 type Tone = "neutral" | "good" | "warning" | "critical";
 
@@ -36,7 +37,6 @@ export function StatTile({
   support?: ReactNode;
   footnote?: string;
 }) {
-  const rendered = typeof value === "string" ? value : formatMinor(value);
   return (
     <div className={`card p-5 ${lead ? "sm:p-6" : ""}`}>
       <div className="section-label">{label}</div>
@@ -46,7 +46,7 @@ export function StatTile({
         }`}
         style={{ color: TONE_INK[tone] }}
       >
-        {rendered}
+        {typeof value === "string" ? value : <AnimatedAmount minor={value} className="" />}
       </div>
       {support && (
         <div className="mt-2 text-xs" style={{ color: "var(--text-secondary)" }}>

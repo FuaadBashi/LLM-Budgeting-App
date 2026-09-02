@@ -31,12 +31,35 @@ JPEG = b"\xff\xd8\xff\xe0" + b"fake image bytes"
 class FakeReader:
     model = "fake-vision"
 
-    def __init__(self, read: receipts.ReceiptRead):
+    def __init__(
+        self,
+        read: receipts.ReceiptRead,
+        verification: receipts.ReceiptVerification | None = None,
+    ):
         self._read = read
+        self._verification = verification
         self.calls = 0
+        self.verify_calls = 0
 
     def read(self, image, media_type):
         self.calls += 1
+        return self._read
+
+    def verify(self, image, media_type, read):
+        self.verify_calls += 1
+        return self._verification
+
+
+class ReaderWithNoVerify:
+    """Mimics a reader written before verify() existed -- stage() must not
+    crash just because the second opinion isn't available."""
+
+    model = "old-style"
+
+    def __init__(self, read: receipts.ReceiptRead):
+        self._read = read
+
+    def read(self, image, media_type):
         return self._read
 
 
@@ -230,6 +253,64 @@ def test_the_raw_read_is_kept_verbatim(session, accounts):
 
 
 # --------------------------------------------------------------------------
+# The second opinion -- informational only, A1' unmoved
+# --------------------------------------------------------------------------
+
+
+def test_a_second_check_that_disagrees_is_surfaced_not_applied(session, accounts):
+    """The whole point: a disagreeing second pass is a note, not a correction."""
+    reader = FakeReader(
+        a_receipt(total="42.30"),
+        receipts.ReceiptVerification(matches=False, note="total looks like 45.30"),
+    )
+    candidate = stage(session, accounts, reader)
+    batch = session.get(ImportBatch, candidate.batch_id)
+
+    assert "Second check: total looks like 45.30" in batch.notes
+    assert candidate.raw["verification_matches"] is False
+    assert candidate.raw["verification_note"] == "total looks like 45.30"
+    # Not applied: the staged amount is still the first read's, untouched.
+    assert candidate.amount == Decimal("-42.30")
+
+
+def test_a_second_check_that_agrees_adds_no_note(session, accounts):
+    reader = FakeReader(
+        a_receipt(), receipts.ReceiptVerification(matches=True, note="")
+    )
+    candidate = stage(session, accounts, reader)
+    batch = session.get(ImportBatch, candidate.batch_id)
+
+    assert "Second check" not in batch.notes
+    assert candidate.raw["verification_matches"] is True
+
+
+def test_no_second_opinion_is_not_treated_as_a_disagreement(session, accounts):
+    """None means no opinion was formed -- never surfaced as a false match."""
+    candidate = stage(session, accounts, FakeReader(a_receipt(), verification=None))
+    batch = session.get(ImportBatch, candidate.batch_id)
+
+    assert "Second check" not in batch.notes
+    assert candidate.raw["verification_matches"] is None
+    assert candidate.raw["verification_note"] == ""
+
+
+def test_a_reader_without_verify_does_not_crash_staging(session, accounts):
+    """Graceful degradation for anything that predates the second pass."""
+    candidate = stage(session, accounts, ReaderWithNoVerify(a_receipt()))
+    assert candidate.id is not None
+
+
+def test_a_failing_verification_call_does_not_fail_the_upload(session, accounts):
+    class ExplodingVerifyReader(FakeReader):
+        def verify(self, image, media_type, read):
+            raise RuntimeError("the network is down")
+
+    candidate = stage(session, accounts, ExplodingVerifyReader(a_receipt()))
+    assert candidate.id is not None
+    assert candidate.raw["verification_matches"] is None
+
+
+# --------------------------------------------------------------------------
 # A3 and parsing
 # --------------------------------------------------------------------------
 
@@ -306,3 +387,48 @@ def test_a_bad_date_does_not_discard_a_good_total():
     read = receipts.parse('{"total":"12.00","date":"last tuesday","confident":true}')
     assert read.total == Decimal("12.00")
     assert read.when is None
+
+
+# --------------------------------------------------------------------------
+# Verification reply parsing
+# --------------------------------------------------------------------------
+
+
+def test_a_matching_verification_reply_is_read():
+    v = receipts.parse_verification('{"matches": true, "note": ""}')
+    assert v.matches is True
+    assert v.note == ""
+
+
+def test_a_disagreeing_verification_reply_is_read():
+    v = receipts.parse_verification(
+        '{"matches": false, "note": "total looks like 45.30, not 42.30"}'
+    )
+    assert v.matches is False
+    assert "45.30" in v.note
+
+
+def test_a_fenced_verification_reply_is_read():
+    v = receipts.parse_verification('```json\n{"matches": true, "note": ""}\n```')
+    assert v.matches is True
+
+
+def test_an_unparseable_verification_reply_is_no_opinion_not_a_match():
+    for text in ("sorry, I cannot help", "", "[1,2,3]"):
+        assert receipts.parse_verification(text) is None
+
+
+def test_an_open_model_provider_supplies_a_reader_with_verify(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "openai_compatible")
+    built = receipts.build_reader()
+    assert hasattr(built, "verify")
+
+
+def test_an_unreachable_vision_server_returns_no_opinion_rather_than_raising():
+    """Same failure mode as read(): Ollama being down must not raise."""
+    reader = receipts.OpenAICompatibleReader(
+        "http://127.0.0.1:1/v1", "", "llama3.2-vision"
+    )
+    assert reader.verify(JPEG, "image/jpeg", a_receipt()) is None

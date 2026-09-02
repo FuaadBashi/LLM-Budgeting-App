@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { PreferencesPanel } from "@/components/PreferencesPanel";
 import { TransactionEntry } from "@/components/TransactionEntry";
 import { useDesign, type Design } from "@/lib/design";
@@ -55,6 +55,7 @@ const CONTENT_OFFSET: Record<Design, string> = {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { design } = useDesign();
+  const pathname = usePathname();
 
   return (
     <div className="min-h-dvh" style={{ background: "var(--page-plane)" }}>
@@ -80,8 +81,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         {design === "console" && <CommandBar />}
 
-        {/* Bottom padding clears the mobile nav bar. */}
-        <div className="flex-1 pb-28 lg:pb-10">{children}</div>
+        {/* Bottom padding clears the mobile nav bar. Keyed on the route so
+            noir's route-fade keyframe replays on every navigation -- the
+            other three designs get the same key churn but no matching
+            animation rule, so it is a no-op for them. */}
+        <div key={design === "noir" ? pathname : undefined} className="route-fade flex-1 pb-28 lg:pb-10">
+          {children}
+        </div>
       </div>
 
       {/* Mobile bottom navigation -- identical across all four designs. */}
@@ -132,11 +138,24 @@ function RailNav({ design }: { design: "noir" | "console" }) {
           PFOS
         </div>
       )}
-      <nav className="flex flex-1 flex-col items-center gap-1">
+      <nav className="flex flex-col items-center gap-1">
         {NAV.map((item, i) => (
-          <RailLink key={item.key} item={item} index={i} numbered={design === "console"} />
+          <RailLink
+            key={item.key}
+            item={item}
+            index={i}
+            numbered={design === "console"}
+            stagger={design === "noir"}
+          />
         ))}
       </nav>
+      {/* The rail is taller than ten icons on most screens -- rather than
+          leave that column empty, noir fills it with a brass hairline and a
+          live clock. Console/noir share this component, so the filler is
+          gated to noir specifically and is otherwise just flex space. */}
+      <div className="flex flex-1 flex-col items-center">
+        {design === "noir" && <RailAmbient />}
+      </div>
       <TransactionEntry iconOnly className="mt-2" />
     </aside>
   );
@@ -146,16 +165,19 @@ function RailLink({
   item,
   index,
   numbered,
+  stagger,
 }: {
   item: Item;
   index: number;
   numbered: boolean;
+  stagger: boolean;
 }) {
   const current = useIsCurrent(item.href);
-  const className = "navlink flex h-10 w-10 items-center justify-center rounded-[var(--radius-sm)]";
-  const style = current
+  const className = `navlink flex h-10 w-10 items-center justify-center rounded-[var(--radius-sm)] ${stagger ? "stagger-in" : ""}`;
+  const style: CSSProperties & Record<string, string | number> = current
     ? { background: "var(--accent-soft)", color: "var(--accent)" }
     : { color: "var(--text-muted)" };
+  if (stagger) style["--i"] = index;
   const content = numbered ? (
     <span className="font-display text-[11px]">{String(index + 1).padStart(2, "0")}</span>
   ) : (
@@ -179,6 +201,60 @@ function RailLink({
     >
       {content}
     </Link>
+  );
+}
+
+/**
+ * Fills the dead space below a short nav list on tall viewports: a brass
+ * hairline that fades at both ends, with a live clock at its centre. Purely
+ * ambient (aria-hidden) -- it names no route and does nothing on click.
+ */
+function RailAmbient() {
+  const [time, setTime] = useState<string | null>(null);
+
+  useEffect(() => {
+    function tick() {
+      setTime(new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }));
+    }
+    tick();
+    const id = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const rule = (
+    <div
+      className="w-px flex-1"
+      style={{ background: "linear-gradient(to bottom, transparent, var(--hairline-strong), transparent)" }}
+    />
+  );
+
+  return (
+    <div className="flex flex-1 flex-col items-center gap-4 py-3" aria-hidden>
+      {rule}
+      <Ticks />
+      <span className="pulse-dot block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent)" }} />
+      {time && (
+        <span
+          className="tnum text-[9px] tracking-[0.25em]"
+          style={{ color: "var(--text-muted)", writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+        >
+          {time}
+        </span>
+      )}
+      <Ticks />
+      {rule}
+    </div>
+  );
+}
+
+/** A short ruler -- five ticks, alternating short and long, like a scale. */
+function Ticks() {
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      {[3, 5, 3, 5, 3].map((w, i) => (
+        <span key={i} className="block h-px" style={{ width: w, background: "var(--hairline-strong)" }} />
+      ))}
+    </div>
   );
 }
 

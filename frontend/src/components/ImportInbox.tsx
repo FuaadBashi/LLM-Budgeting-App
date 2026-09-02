@@ -356,10 +356,17 @@ function CandidateRow({
   const [category, setCategory] = useState(row.suggested_category_id ?? "");
   const isDuplicate = row.status === "duplicate";
 
+  // verification_* are surfaced as their own banner below, not in the
+  // generic dump -- a warning nobody sees because it's behind "Source row"
+  // is barely better than not having it.
   const raw = useMemo(
-    () => Object.entries(row.raw).filter(([, v]) => v !== ""),
+    () =>
+      Object.entries(row.raw).filter(
+        ([k, v]) => v !== "" && k !== "verification_matches" && k !== "verification_note",
+      ),
     [row.raw],
   );
+  const verificationNote = row.raw.verification_note;
 
   if (row.status === "accepted") {
     return (
@@ -403,6 +410,15 @@ function CandidateRow({
             ? "Looks like a payment already in the ledger."
             : "Looks like an earlier row in the same file."}{" "}
           Reopen it if this really happened twice.
+        </p>
+      )}
+
+      {/* A second, independent model pass looked at the receipt again and
+          didn't agree with the first read -- surfaced up front rather than
+          behind "Source row", since a check nobody sees isn't much of one. */}
+      {verificationNote && (
+        <p className="mt-1.5 text-xs" style={{ color: "var(--status-warning)" }}>
+          <span aria-hidden>▲</span> Second check: {verificationNote}
         </p>
       )}
 

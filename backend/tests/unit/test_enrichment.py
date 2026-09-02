@@ -34,13 +34,38 @@ class FakeSuggester:
 
     model = "fake-model"
 
-    def __init__(self, answers: dict[str, str | None] | None = None):
+    def __init__(
+        self,
+        answers: dict[str, str | None] | None = None,
+        verdicts: dict[str, bool] | None = None,
+    ):
         self.answers = answers or {}
+        #: What verify() says about a `{description: category_name}` pick.
+        #: Absent from this dict means "no opinion" -- the pick stands.
+        self.verdicts = verdicts or {}
         self.calls: list[list[str]] = []
+        self.verify_calls: list[dict[str, str]] = []
 
     def suggest(self, descriptions, categories):
         self.calls.append(list(descriptions))
         self.offered = list(categories)
+        return {d: self.answers.get(d) for d in descriptions if d in self.answers}
+
+    def verify(self, picks):
+        self.verify_calls.append(dict(picks))
+        return {d: v for d, v in self.verdicts.items() if d in picks}
+
+
+class SuggesterWithNoVerify:
+    """Mimics a Suggester written before verify() existed -- resolve() must
+    not crash just because the second opinion isn't available."""
+
+    model = "old-style"
+
+    def __init__(self, answers: dict[str, str | None]):
+        self.answers = answers
+
+    def suggest(self, descriptions, categories):
         return {d: self.answers.get(d) for d in descriptions if d in self.answers}
 
 
@@ -48,6 +73,11 @@ class ExplodingSuggester:
     model = "boom"
 
     def suggest(self, descriptions, categories):
+        raise RuntimeError("the network is down")
+
+
+class ExplodingVerifySuggester(FakeSuggester):
+    def verify(self, picks):
         raise RuntimeError("the network is down")
 
 
@@ -381,3 +411,95 @@ def test_suggestions_never_create_transactions(session, categories, accounts):
     fake = FakeSuggester({"ANY": "Groceries"})
     enrichment.resolve(session, ["ANY"], suggester=fake)
     assert session.scalar(select(func.count()).select_from(Transaction)) == before
+
+
+# --------------------------------------------------------------------------
+# The second opinion -- only ever narrows a pick to null
+# --------------------------------------------------------------------------
+
+
+def test_an_explicit_disagreement_downgrades_the_pick_to_null(session, categories):
+    fake = FakeSuggester(
+        {"TESCO STORES 3421": "Groceries"},
+        verdicts={"TESCO STORES 3421": False},
+    )
+    assert enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake) == {}
+
+    row = session.scalars(select(MerchantSuggestion)).one()
+    assert row.category_id is None, "a downgraded pick must not reach the cache either"
+
+
+def test_an_explicit_agreement_keeps_the_pick(session, categories):
+    fake = FakeSuggester(
+        {"TESCO STORES 3421": "Groceries"},
+        verdicts={"TESCO STORES 3421": True},
+    )
+    resolved = enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake)
+    assert resolved[normalise_description("TESCO STORES 3421")] == (
+        categories["groceries"].id
+    )
+
+
+def test_no_opinion_keeps_the_original_pick(session, categories):
+    """Absent from verify()'s reply, not False -- the pick must survive."""
+    fake = FakeSuggester({"TESCO STORES 3421": "Groceries"})  # no verdicts at all
+    resolved = enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake)
+    assert resolved[normalise_description("TESCO STORES 3421")] == (
+        categories["groceries"].id
+    )
+
+
+def test_verification_is_only_asked_about_real_picks(session, categories):
+    """A1 extended to the second pass: an invented category is never even
+    offered to verify() -- it was already None before this call happens, and
+    with nothing real to check, verify() is not called at all."""
+    fake = FakeSuggester({"WEIRD MERCHANT": "Yacht Maintenance"})
+    enrichment.resolve(session, ["WEIRD MERCHANT"], suggester=fake)
+    assert fake.verify_calls == []
+
+
+def test_a_suggester_without_verify_does_not_crash_resolve(session, categories):
+    """Graceful degradation for anything that predates the second pass."""
+    old = SuggesterWithNoVerify({"TESCO STORES 3421": "Groceries"})
+    resolved = enrichment.resolve(session, ["TESCO STORES 3421"], suggester=old)
+    assert resolved[normalise_description("TESCO STORES 3421")] == (
+        categories["groceries"].id
+    )
+
+
+def test_a_failing_verification_call_does_not_fail_the_import(session, categories):
+    fake = ExplodingVerifySuggester({"TESCO STORES 3421": "Groceries"})
+    resolved = enrichment.resolve(session, ["TESCO STORES 3421"], suggester=fake)
+    assert resolved[normalise_description("TESCO STORES 3421")] == (
+        categories["groceries"].id
+    )
+
+
+def test_a_null_answer_is_never_sent_to_verify(session, categories):
+    """Nothing to verify when the first pass already said null."""
+    fake = FakeSuggester({"J SMITH": None})
+    enrichment.resolve(session, ["J SMITH"], suggester=fake)
+    assert fake.verify_calls == []
+
+
+# --------------------------------------------------------------------------
+# Verification reply parsing
+# --------------------------------------------------------------------------
+
+
+def test_a_verification_reply_is_read():
+    assert enrichment._parse_verification('{"TESCO": true, "DISHOOM": false}') == {
+        "TESCO": True,
+        "DISHOOM": False,
+    }
+
+
+def test_a_fenced_verification_reply_is_read():
+    parsed = enrichment._parse_verification('```json\n{"TESCO": true}\n```')
+    assert parsed == {"TESCO": True}
+
+
+def test_an_unparseable_verification_reply_is_empty_not_an_exception():
+    assert enrichment._parse_verification("not json at all") == {}
+    assert enrichment._parse_verification("") == {}
+    assert enrichment._parse_verification("[1, 2, 3]") == {}

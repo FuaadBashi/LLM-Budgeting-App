@@ -437,6 +437,210 @@
 }
 
 
+/* ======================================================================
+   E. VAULT NOIR -- motion layer.
+
+   Scoped entirely to [data-design="noir"] (covers both its light and dark
+   variants -- the attribute doesn't change with appearance) so the other
+   three directions render exactly as before. "Quiet, dark, expensive" reads
+   as motion too: slow decelerating eases, never a bounce or a snap. Every
+   rule that starts an element invisible (opacity: 0) lives inside the
+   reduced-motion media query, so with motion off elements simply render in
+   their end state rather than getting stuck hidden.
+   ====================================================================== */
+[data-design="noir"] {
+  --ease-noir: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 220ms;
+  --dur-med: 420ms;
+  --dur-slow: 680ms;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes noir-rise {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+      filter: blur(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+      filter: blur(0);
+    }
+  }
+
+  @keyframes noir-content-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes noir-modal-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97) translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes noir-backdrop-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes noir-meter-grow {
+    from {
+      width: 0%;
+    }
+    to {
+      width: var(--target-width, 100%);
+    }
+  }
+
+  /* SVG stroke draw-in: pathLength="1" on the element means "1" is always
+     the full length regardless of actual geometry, so dasharray/dashoffset
+     never need the element's real length measured in JS. */
+  @keyframes noir-draw {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+
+  /* --target-opacity defaults to 1 (fine for the chart's point markers);
+     the breach-area polygon sets it to its own semi-transparent 0.18, since
+     an inline SVG `opacity` attribute is only the animation's un-applied
+     base value and would otherwise be overridden to a fully opaque 1. */
+  @keyframes noir-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: var(--target-opacity, 1);
+    }
+  }
+
+  @keyframes noir-pulse {
+    0%, 100% {
+      opacity: 0.35;
+      transform: scale(0.85);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Cards and list rows cascade in on load. --i is set inline per item
+     (index, clamped by the caller) -- one keyframe, N delays. */
+  [data-design="noir"] .stagger-in {
+    opacity: 0;
+    animation: noir-rise var(--dur-slow) var(--ease-noir) forwards;
+    animation-delay: calc(var(--i, 0) * 70ms);
+  }
+
+  [data-design="noir"] .route-fade {
+    animation: noir-content-in var(--dur-med) var(--ease-noir);
+  }
+
+  [data-design="noir"] .modal-in {
+    animation: noir-modal-in var(--dur-fast) var(--ease-noir);
+  }
+
+  [data-design="noir"] .backdrop-in {
+    animation: noir-backdrop-in var(--dur-fast) ease-out;
+  }
+
+  /* Budget meter: grows from empty on first paint. --target-width is set
+     inline alongside the real `width`, which .budget-meter-fill's own
+     transition rule (below, outside this media query) takes over for every
+     change after this animation has finished. */
+  [data-design="noir"] .budget-meter-fill {
+    animation: noir-meter-grow var(--dur-slow) var(--ease-noir) both;
+  }
+
+  [data-design="noir"] .chart-draw {
+    stroke-dasharray: 1;
+    animation: noir-draw 1.1s var(--ease-noir) forwards;
+  }
+
+  [data-design="noir"] .chart-fade {
+    opacity: 0;
+    animation: noir-fade-in var(--dur-med) ease-out forwards;
+    animation-delay: 850ms;
+  }
+
+  [data-design="noir"] .pulse-dot {
+    animation: noir-pulse 2.6s ease-in-out infinite;
+  }
+}
+
+/* Nav hover: a glow the inline active-state colours can't clash with,
+   since box-shadow/transform are never set inline on these links. */
+[data-design="noir"] .navlink {
+  transition: box-shadow var(--dur-med) var(--ease-noir), transform var(--dur-med) var(--ease-noir);
+}
+[data-design="noir"] .navlink:hover {
+  box-shadow: 0 0 0 1px var(--hairline-strong), 0 0 20px -6px var(--accent);
+  transform: translateY(-1px);
+}
+
+/* Budget meter fill: width and colour ease in on noir instead of jumping,
+   for every change after the initial grow-in above. */
+[data-design="noir"] .budget-meter-fill {
+  transition: width var(--dur-slow) var(--ease-noir), background-color var(--dur-med) var(--ease-noir);
+}
+
+/* Severity accent on a budget card. Base rule (all designs): the same plain
+   hairline every card has always had -- --severity-line is only ever read by
+   the noir override below, so on the other three designs it sits unused. */
+.severity-accent {
+  box-shadow: inset 0 0 0 var(--border-w, 1px) var(--hairline);
+}
+[data-design="noir"] .severity-accent {
+  box-shadow: inset 0 0 0 var(--border-w, 1px) var(--hairline), inset 0 2px 0 0 var(--severity-line, transparent);
+  transition: box-shadow var(--dur-med) var(--ease-noir);
+}
+
+/* Hover lift: every card gains weight under the cursor. filter/transform
+   rather than box-shadow, so it composes with .severity-accent's own
+   box-shadow (the severity line) instead of overwriting it. */
+[data-design="noir"] .card,
+[data-design="noir"] .severity-accent {
+  transition: transform var(--dur-fast) var(--ease-noir), filter var(--dur-fast) var(--ease-noir), box-shadow var(--dur-med) var(--ease-noir);
+}
+[data-design="noir"] .card:hover,
+[data-design="noir"] .severity-accent:hover {
+  transform: translateY(-3px);
+  filter: drop-shadow(0 18px 28px rgba(0, 0, 0, 0.5));
+}
+
+/* Rail dead-space ambient: a slow brass wash bleeding from the top of the
+   page, and a barely-there ledger grid -- the wide empty column either side
+   of the content on desktop was flat and did nothing, this gives it
+   atmosphere without competing with the numbers. */
+[data-design="noir"] body {
+  background-image:
+    radial-gradient(ellipse 1100px 700px at 50% -8%, color-mix(in oklab, var(--accent) 7%, transparent), transparent 65%),
+    repeating-linear-gradient(0deg, transparent, transparent 39px, var(--gridline) 40px),
+    repeating-linear-gradient(90deg, transparent, transparent 39px, var(--gridline) 40px);
+  background-attachment: fixed;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

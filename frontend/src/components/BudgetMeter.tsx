@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { formatMinor, type Minor } from "@/lib/money";
 
 type Severity = "ok" | "warning" | "critical";
@@ -51,8 +52,14 @@ export function BudgetMeter({
         aria-label={`${formatMinor(spent)} spent of ${formatMinor(allowance)}`}
       >
         <div
-          className="h-full rounded-full transition-[width]"
-          style={{ width: `${fillPct}%`, background: fill }}
+          className="budget-meter-fill h-full rounded-full"
+          style={
+            {
+              width: `${fillPct}%`,
+              background: fill,
+              "--target-width": `${fillPct}%`,
+            } as CSSProperties
+          }
         />
         {pacePct !== null && (
           // 2px surface gap either side so the marker reads as a separate mark

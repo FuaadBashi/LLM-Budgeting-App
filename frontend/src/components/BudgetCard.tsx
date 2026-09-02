@@ -1,6 +1,17 @@
+import type { CSSProperties } from "react";
+import { AnimatedAmount } from "@/components/AnimatedAmount";
 import { BudgetMeter, type Severity } from "@/components/BudgetMeter";
 import type { BudgetPeriod, MerchantAnomaly } from "@/lib/api";
 import { formatMinor, formatSignedMinor } from "@/lib/money";
+
+// Extra visual weight for the two severities that need attention -- "ok"
+// carries none, so a page of healthy budgets stays as quiet as the rest of
+// noir's language rather than every card competing for the eye.
+const SEVERITY_ACCENT: Record<Severity, string | null> = {
+  ok: null,
+  warning: "var(--status-warning)",
+  critical: "var(--status-critical)",
+};
 
 /** Human copy for each warning code. The backend sends codes, never prose. */
 const WARNING_COPY: Record<string, { label: string; tone: Tone }> = {
@@ -79,20 +90,26 @@ function StatusBadge({ tone, label }: { tone: Tone; label: string }) {
   );
 }
 
-export function BudgetCard({ budget }: { budget: BudgetPeriod }) {
+export function BudgetCard({ budget, index }: { budget: BudgetPeriod; index?: number }) {
   const severity = severityOf(budget);
   const fired = budget.warnings.filter((w) => w.status === "fired");
   // "Could not be computed" is a third state and must never render as "on track".
   const unevaluated = budget.warnings.filter((w) => w.status === "not_evaluated");
   const closed = budget.state === "closed";
+  // The coloured edge itself is noir-only -- see the `[data-design="noir"]
+  // .severity-accent` rule in globals.css, which is the only place this
+  // custom property is ever read. Elsewhere it sits inert and every design
+  // keeps the plain hairline box-shadow from the base `.severity-accent` rule.
+  const style: CSSProperties & Record<string, string | number> = {
+    background: "var(--surface-1)",
+    "--severity-line": SEVERITY_ACCENT[severity] ?? "transparent",
+  };
+  if (index !== undefined) style["--i"] = index;
 
   return (
     <article
-      className="rounded-[var(--radius)] p-5"
-      style={{
-        background: "var(--surface-1)",
-        boxShadow: "inset 0 0 0 var(--border-w, 1px) var(--hairline)",
-      }}
+      className={`severity-accent rounded-[var(--radius)] p-5 ${index !== undefined ? "stagger-in" : ""}`}
+      style={style}
     >
       <header className="mb-4 flex items-baseline justify-between gap-3">
         <h3 className="font-display" style={{ color: "var(--text-primary)" }}>
@@ -116,9 +133,14 @@ export function BudgetCard({ budget }: { budget: BudgetPeriod }) {
           className="font-display text-2xl"
           style={{ color: "var(--text-primary)" }}
         >
-          {budget.presented_allowance_minor !== null
-            ? formatMinor(budget.presented_allowance_minor)
-            : formatMinor(budget.remaining_minor)}
+          <AnimatedAmount
+            minor={
+              budget.presented_allowance_minor !== null
+                ? budget.presented_allowance_minor
+                : budget.remaining_minor
+            }
+            className=""
+          />
         </div>
         {budget.binding_constraint === "safe_to_spend" && (
           <p className="mt-1 text-xs" style={{ color: "var(--status-warning)" }}>

@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+import { AnimatedAmount } from "@/components/AnimatedAmount";
 import { AppShell } from "@/components/AppShell";
 import { requireSession } from "@/lib/guard";
 import { BalanceCurve } from "@/components/BalanceCurve";
@@ -117,18 +119,19 @@ export default async function Dashboard() {
             <div className="sm:text-right">
               <div className="section-label">Net worth</div>
               <div
-                className="text-lg font-semibold tnum"
+                className="text-lg font-semibold"
                 style={{ color: "var(--text-primary)" }}
               >
-                {formatMinor(netWorth.net_worth_minor)}
+                <AnimatedAmount minor={netWorth.net_worth_minor} />
               </div>
             </div>
           )}
         </header>
 
-        {/* Plan section 11.1: the recommended top row, in the order it specifies. */}
+        {/* Plan section 11.1: the recommended top row, in the order it specifies.
+            Each cell staggers in on its own delay -- see .stagger-in, noir only. */}
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="sm:col-span-2 lg:col-span-2">
+          <div className="stagger-in sm:col-span-2 lg:col-span-2" style={{ "--i": 0 } as CSSProperties}>
             <StatTile
               lead
               label="Safe to spend"
@@ -147,39 +150,43 @@ export default async function Dashboard() {
             />
           </div>
 
-          <StatTile
-            label="Safe to spend today"
-            value={daily !== null ? daily : "—"}
-            tone={daily !== null && daily <= 0 ? "critical" : "neutral"}
-            support={
-              daily === null
-                ? "No open budgets."
-                : bindingBudget?.binding_constraint === "safe_to_spend"
-                  ? "▲ Limited by cash, not by a budget."
-                  : `Tightest budget: ${bindingBudget?.budget_name}.`
-            }
-          />
+          <div className="stagger-in" style={{ "--i": 1 } as CSSProperties}>
+            <StatTile
+              label="Safe to spend today"
+              value={daily !== null ? daily : "—"}
+              tone={daily !== null && daily <= 0 ? "critical" : "neutral"}
+              support={
+                daily === null
+                  ? "No open budgets."
+                  : bindingBudget?.binding_constraint === "safe_to_spend"
+                    ? "▲ Limited by cash, not by a budget."
+                    : `Tightest budget: ${bindingBudget?.budget_name}.`
+              }
+            />
+          </div>
 
-          <StatTile
-            label="Projected month-end savings"
-            value={recovery ? recovery.projected_contribution_total_minor : "—"}
-            tone={
-              recovery && recovery.projected_contribution_total_minor <
-              recovery.planned_total_minor
-                ? "warning"
-                : "good"
-            }
-            support={
-              recovery
-                ? recovery.projected_contribution_total_minor <
-                  recovery.planned_total_minor
-                  ? `▲ ${formatMinor(recovery.planned_total_minor)} planned.`
-                  : "On plan."
-                : undefined
-            }
-          />
+          <div className="stagger-in" style={{ "--i": 2 } as CSSProperties}>
+            <StatTile
+              label="Projected month-end savings"
+              value={recovery ? recovery.projected_contribution_total_minor : "—"}
+              tone={
+                recovery && recovery.projected_contribution_total_minor <
+                recovery.planned_total_minor
+                  ? "warning"
+                  : "good"
+              }
+              support={
+                recovery
+                  ? recovery.projected_contribution_total_minor <
+                    recovery.planned_total_minor
+                    ? `▲ ${formatMinor(recovery.planned_total_minor)} planned.`
+                    : "On plan."
+                  : undefined
+              }
+            />
+          </div>
 
-          <div className="sm:col-span-2 lg:col-span-4">
+          <div className="stagger-in sm:col-span-2 lg:col-span-4" style={{ "--i": 3 } as CSSProperties}>
             <div className="card flex flex-wrap items-baseline justify-between gap-3 p-5">
               <div>
                 <div className="section-label">Next major commitment</div>
@@ -193,10 +200,10 @@ export default async function Dashboard() {
               {nextOutflow && (
                 <div className="text-right">
                   <div
-                    className="text-2xl font-semibold tnum"
+                    className="text-2xl font-semibold"
                     style={{ color: "var(--text-primary)" }}
                   >
-                    {formatMinor(Math.abs(nextOutflow.amount_minor))}
+                    <AnimatedAmount minor={Math.abs(nextOutflow.amount_minor)} />
                   </div>
                   <div className="text-xs" style={{ color: "var(--text-muted)" }}>
                     due {shortDate(nextOutflow.day)}
@@ -209,14 +216,17 @@ export default async function Dashboard() {
 
         {recovery && recovery.gap_minor > 0 && (
           <section
-            className="card p-5"
-            style={{
-              boxShadow: `inset 0 0 0 1px ${
-                recovery.recovery_impossible
-                  ? "var(--status-critical)"
-                  : "var(--status-warning)"
-              }`,
-            }}
+            className="card stagger-in p-5"
+            style={
+              {
+                boxShadow: `inset 0 0 0 1px ${
+                  recovery.recovery_impossible
+                    ? "var(--status-critical)"
+                    : "var(--status-warning)"
+                }`,
+                "--i": 4,
+              } as CSSProperties
+            }
           >
             <h2
               className="text-sm font-medium"
@@ -263,7 +273,7 @@ export default async function Dashboard() {
         {calendar && (
           <section>
             <h2 className="section-label mb-3">Projected balance</h2>
-            <div className="card p-5">
+            <div className="card stagger-in p-5" style={{ "--i": 5 } as CSSProperties}>
               <p className="mb-4 text-sm" style={{ color: "var(--text-secondary)" }}>
                 {calendar.first_breach_date ? (
                   <>
@@ -352,8 +362,8 @@ export default async function Dashboard() {
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
-              {budgets.map((b) => (
-                <BudgetCard key={b.budget_id} budget={b} />
+              {budgets.map((b, i) => (
+                <BudgetCard key={b.budget_id} budget={b} index={i} />
               ))}
             </div>
           )}
@@ -367,8 +377,12 @@ export default async function Dashboard() {
                 No accounts yet.
               </p>
             )}
-            {grouped.map((group) => (
-              <div key={group.label} className="p-4">
+            {grouped.map((group, i) => (
+              <div
+                key={group.label}
+                className="stagger-in p-4"
+                style={{ "--i": i } as CSSProperties}
+              >
                 <div className="section-label mb-2">{group.label}</div>
                 <dl className="space-y-1.5">
                   {group.rows.map((a) => (

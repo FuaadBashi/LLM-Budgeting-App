@@ -72,8 +72,8 @@ export default async function BudgetsPage() {
               <section>
                 <h2 className="section-label mb-3">This period</h2>
                 <div className="grid gap-4 md:grid-cols-2">
-                  {periods.map((p) => (
-                    <BudgetCard key={p.budget_id} budget={p} />
+                  {periods.map((p, i) => (
+                    <BudgetCard key={p.budget_id} budget={p} index={i} />
                   ))}
                 </div>
               </section>

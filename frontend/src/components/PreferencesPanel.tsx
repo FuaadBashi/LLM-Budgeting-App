@@ -51,7 +51,7 @@ export function PreferencesPanel() {
     <div ref={ref} className="fixed left-4 bottom-36 z-30 lg:left-6 lg:bottom-6">
       {open && (
         <div
-          className="mb-3 w-72 rounded-[var(--radius)] p-4"
+          className={`mb-3 w-72 rounded-[var(--radius)] p-4 ${design === "noir" ? "modal-in" : ""}`}
           style={{
             background: "var(--surface-1)",
             boxShadow: "inset 0 0 0 var(--border-w) var(--hairline), var(--shadow-raised)",

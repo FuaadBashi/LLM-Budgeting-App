@@ -62,6 +62,28 @@ Rules:
   a person has to check every field either way, and a plausible wrong total is
   the one that gets waved through."""
 
+#: A second, independent look at the same image -- a deliberately different
+#: task from PROMPT (checking a specific claim rather than open-ended reading),
+#: so it is not just the same deterministic call repeated for nothing.
+VERIFY_PROMPT = """You extracted these values from a receipt photo:
+
+  merchant: {merchant}
+  date: {date}
+  total: {total}
+
+Look at the image again and check each value against what is actually printed.
+Reply with JSON only, no explanation:
+
+{{
+  "matches": true or false,
+  "note": "one short sentence naming what looks wrong, or empty if it matches"
+}}
+
+Rules:
+- "matches" is true only if every value above is what the receipt actually shows.
+- Name the discrepancy, do not propose a fix -- a person corrects the field
+  themselves; this is a second opinion, not a second guess."""
+
 
 class ReceiptError(Exception):
     """A receipt that could not be staged. Nothing is written."""
@@ -80,10 +102,30 @@ class ReceiptRead:
         return self.total is not None and self.total > ZERO
 
 
+@dataclass(frozen=True)
+class ReceiptVerification:
+    """A second opinion on an already-usable `ReceiptRead`.
+
+    Purely informational -- A1' does not bend for this any more than it does
+    for the read itself. `note` lands in the candidate for a person to weigh,
+    never in a field that changes what gets staged.
+    """
+
+    matches: bool
+    note: str
+
+
 class Reader:
     """Anything that can turn an image into a `ReceiptRead`."""
 
     def read(self, image: bytes, media_type: str) -> ReceiptRead:  # pragma: no cover
+        raise NotImplementedError
+
+    def verify(
+        self, image: bytes, media_type: str, read: ReceiptRead
+    ) -> ReceiptVerification | None:  # pragma: no cover
+        """A second look. `None` means no opinion was formed -- never a false
+        "matches", which would read as a check that did not actually happen."""
         raise NotImplementedError
 
 
@@ -94,6 +136,11 @@ class NullReader:
 
     def read(self, image: bytes, media_type: str) -> ReceiptRead:
         return ReceiptRead(None, None, None, confident=False)
+
+    def verify(
+        self, image: bytes, media_type: str, read: ReceiptRead
+    ) -> ReceiptVerification | None:
+        return None
 
 
 class OpenAICompatibleReader:
@@ -123,6 +170,24 @@ class OpenAICompatibleReader:
             log.warning("receipt read failed: %s", exc)
             return NullReader().read(image, media_type)
         return parse(text)
+
+    def verify(
+        self, image: bytes, media_type: str, read: ReceiptRead
+    ) -> ReceiptVerification | None:
+        try:
+            text = providers.chat(
+                base_url=self._base_url,
+                api_key=self._key,
+                model=self.model,
+                prompt=_verify_prompt(read),
+                max_tokens=200,
+                image=image,
+                image_media_type=media_type,
+            )
+        except providers.ProviderError as exc:
+            log.warning("receipt verification failed: %s", exc)
+            return None
+        return parse_verification(text)
 
 
 class ClaudeReader:
@@ -167,9 +232,54 @@ class ClaudeReader:
             return NullReader().read(image, media_type)
         return parse(text)
 
+    def verify(
+        self, image: bytes, media_type: str, read: ReceiptRead
+    ) -> ReceiptVerification | None:
+        try:
+            import anthropic
+        except ImportError:  # pragma: no cover -- optional dependency
+            return None
 
-def parse(text: str) -> ReceiptRead:
-    """Read the reply. Anything unparseable is an unconfident empty result."""
+        client = anthropic.Anthropic(api_key=self._key)
+        try:
+            reply = client.messages.create(
+                model=self.model,
+                max_tokens=200,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": base64.b64encode(image).decode(),
+                                },
+                            },
+                            {"type": "text", "text": _verify_prompt(read)},
+                        ],
+                    }
+                ],
+            )
+            text = "".join(b.text for b in reply.content if b.type == "text")
+        except Exception as exc:  # noqa: BLE001 -- a second opinion is never critical
+            log.warning("receipt verification failed: %s", exc)
+            return None
+        return parse_verification(text)
+
+
+def _verify_prompt(read: ReceiptRead) -> str:
+    return VERIFY_PROMPT.format(
+        merchant=read.merchant or "(not read)",
+        date=read.when.isoformat() if read.when else "(not read)",
+        total=read.total,
+    )
+
+
+def _unfenced_json(text: str) -> dict | None:
+    """Both replies are JSON, sometimes fenced in markdown. Shared so the two
+    parsers cannot drift on what "unparseable" means."""
     body = text.strip()
     if body.startswith("```"):
         body = body.split("```")[1] if "```" in body[3:] else body[3:]
@@ -177,9 +287,28 @@ def parse(text: str) -> ReceiptRead:
     try:
         raw = json.loads(body)
     except (json.JSONDecodeError, IndexError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def parse_verification(text: str) -> ReceiptVerification | None:
+    """Read a verify() reply. Unparseable is `None` -- no opinion, not a false
+    "matches"."""
+    raw = _unfenced_json(text)
+    if raw is None:
+        log.warning("could not parse receipt verification reply")
+        return None
+    return ReceiptVerification(
+        matches=bool(raw.get("matches")),
+        note=str(raw.get("note") or "").strip()[:300],
+    )
+
+
+def parse(text: str) -> ReceiptRead:
+    """Read the reply. Anything unparseable is an unconfident empty result."""
+    raw = _unfenced_json(text)
+    if raw is None:
         log.warning("could not parse receipt reply")
-        return ReceiptRead(None, None, None, confident=False)
-    if not isinstance(raw, dict):
         return ReceiptRead(None, None, None, confident=False)
 
     total = None
@@ -262,15 +391,29 @@ def stage(
     ).first():
         raise ReceiptError("This exact image has already been read.")
 
-    read = (reader or build_reader()).read(image, media_type)
+    active_reader = reader or build_reader()
+    read = active_reader.read(image, media_type)
     if not read.usable:
         raise ReceiptError(
             "Could not read a total from that image. Enter it by hand — a "
             "guessed amount is worse than none."
         )
 
+    # A second, independent look at the same image -- never lets a bad read
+    # through on its own (A1' already requires a person either way), but gives
+    # the reviewer a reason to look closer than "the model said so once".
+    try:
+        verification = active_reader.verify(image, media_type, read)
+    except Exception as exc:  # noqa: BLE001 -- a second opinion is never critical
+        log.warning("receipt verification skipped: %s", exc)
+        verification = None
+
     description = read.merchant or "Receipt"
     when = read.when or today
+
+    notes = [] if read.confident else ["The reader was not confident in this."]
+    if verification is not None and not verification.matches and verification.note:
+        notes.append(f"Second check: {verification.note}")
 
     batch = ImportBatch(
         filename=filename,
@@ -278,7 +421,7 @@ def stage(
         account_id=account_id,
         profile="receipt",
         row_count=1,
-        notes="" if read.confident else "The reader was not confident in this.",
+        notes=" ".join(notes),
     )
     session.add(batch)
     session.flush()
@@ -309,6 +452,10 @@ def stage(
             "total": str(read.total),
             "confident": read.confident,
             "source": "receipt",
+            # Flat primitives, not a nested object -- the frontend renders
+            # every `raw` entry generically, and a dict child would crash it.
+            "verification_matches": None if verification is None else verification.matches,
+            "verification_note": "" if verification is None else verification.note,
         },
         booking_date=when,
         description=description,
