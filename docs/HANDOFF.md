@@ -22,7 +22,7 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 10 | Polish, backups, hosting | ◐ backups and exposure hardening done; the deploy itself is yours |
 | 11 | Assisted categorisation (LLM) | ✅ |
 
-**Phases 0–9 and 11 complete; Phase 10's backup half is done.** 674 tests. Deployment is the
+**Phases 0–9 and 11 complete; Phase 10's backup half is done.** 701 tests. Deployment is the
 only substantial thing left from the original plan, and `docs/RUNNING.md` already describes the
 setup worth having (Tailscale, real certificates, nothing exposed to the internet) — but see
 "Recommended next task" below, which is not that.
@@ -42,6 +42,13 @@ plus a functional jump-to bar) — are switchable from a Preferences control (th
 bottom-left, on every screen) and persist across reloads. See "Frontend" below for where the
 system lives, and `docs/DECISIONS.md` for why it is built the way it is, including two real bugs
 found and fixed along the way that are worth reading before touching `lib/design.tsx` again.
+
+**A motion layer landed for Vault Noir, on the Dashboard and Budgets screens, 2 September 2026.**
+Entrance stagger for cards and list rows, a line-draw-in for the balance chart, budget meters that
+grow from empty, hero figures that count up (`AnimatedAmount.tsx`), route/modal transitions, and
+the rail's dead vertical space filled with a live clock and tick marks — all scoped to
+`[data-design="noir"]` in `globals.css` and gated on `prefers-reduced-motion`. The other eight
+screens and the other three designs have none of it yet — see "Recommended next task" below.
 
 ---
 
@@ -79,8 +86,8 @@ live; routes only translate to and from integer minor units.
 | `domain/backup.py` | Atomic backup writes, retention, staleness (B-A/B-B/B-C) |
 | `scheduler.py` | The lifespan timer that calls it |
 | `ratelimit.py` | Exponential login backoff, global (there is one password) |
-| `domain/enrichment.py` | Merchant → category, cache-first (A1/A2/A3) |
-| `domain/receipts.py` | Reads a photographed receipt into a candidate (A1') |
+| `domain/enrichment.py` | Merchant → category, cache-first (A1/A2/A3); a second independent pass can reject a pick (X23) |
+| `domain/receipts.py` | Reads a photographed receipt into a candidate (A1'); a second pass re-checks the reading against the image |
 
 **Enforced in the database, not application code** (so it holds for raw SQL too):
 
@@ -121,6 +128,7 @@ where something lives.
 | `AppShell.tsx` | Nav chrome for all four designs (rail / masthead / dock / rail+command-bar); mobile top bar and bottom tabs, identical across designs |
 | `PreferencesPanel.tsx` | The gear-icon control: pick a design, pick System/Light/Dark |
 | `StatTile.tsx` | Label + value + optional support/footnote; `lead` marks the one hero figure per screen |
+| `AnimatedAmount.tsx` | Counts a money figure up on mount/change; noir only, gated on `prefers-reduced-motion` |
 | `BudgetCard.tsx` | One budget period: meter, warnings (including merchant anomaly), the "where this comes from" breakdown |
 | `BudgetManager.tsx` | Budget list, creation form, inline edit (amount, rollover policy, rollover reset) |
 | `BudgetMeter.tsx` | The spent/allowance progress bar `BudgetCard` renders |
@@ -191,6 +199,7 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X20 | A receipt reaches the ledger only through the candidate inbox (A1') | ✅ `test_receipts.py` — staging leaves balances and transaction count untouched |
 | X21 | The merchant baseline reads the same postings `Spent` does, netted the same way | ✅ Shared `_legs_in_scope` selector for scope; shared `reimbursement._offsets` walk for netting. `test_merchant_anomaly.py::test_the_baseline_reads_the_same_postings_budget_spent_does` and `::test_a_fully_reimbursed_trip_does_not_trip_the_merchant_warning` |
 | X22 | An account default is stamped on the write, never derived on the read | ✅ `test_account_defaults.py` — changing a default leaves written postings alone, and a restore reproduces the file |
+| X23 | A category the second opinion rejects is never cached as an answer, and is surfaced on the candidate, not just silently blanked | ✅ `test_enrichment.py::test_a_downgraded_pick_is_not_cached_at_all`, `::test_a_downgraded_merchant_is_asked_about_again_next_time`; `test_receipts.py::test_a_second_check_that_disagrees_is_surfaced_not_applied` |
 
 ### Assisted categorisation and receipt reading (Phases 7 and 11)
 
@@ -216,25 +225,36 @@ The cost design is the cache, not the prompt. `merchant_suggestions` is keyed on
 `TESCO STORES 3421` collapses to one row and one question. A merchant is asked about once, ever;
 a user correction is stored as theirs and outranks the model permanently (A2).
 
-**Recommended next task, set by the user 2 September 2026.** Not the deploy — continue the
-visual design system. Four directions now exist and switch cleanly; the explicit ask is motion,
-more variance between screens, and deliberate use of empty space, aimed at reading as distinctly
-modern rather than a reskinned default. Concretely, in order of what is likely to matter most:
+**A second-opinion pass landed 2 September 2026 (X23).** Both `enrichment.resolve()` and
+`receipts.stage()` now follow up a model's own extraction with an independent check of that
+specific claim — "is this category actually right for this description", "does this total match
+what the image shows" — rather than trusting a single pass's self-reported confidence. Purely
+informational for receipts (a disagreement lands as `raw.verification_note` on the candidate,
+never changes the staged amount — A1' is unmoved); for categorisation, an explicit disagreement
+additionally means the pick is **not cached**, so the merchant is a genuine miss again on the next
+import rather than settling on "no category" forever from one disagreement. Both `verify()` calls
+degrade to a no-op (old-style suggester/reader without one, a failed call, `NullSuggester`/
+`NullReader`) without touching the original suggestion — the second opinion is an extra layer of
+caution, never a new dependency. `ImportInbox.tsx` surfaces a disagreement as a warning line on
+the row itself, not behind "Source row".
 
-1. **Motion.** Nothing currently animates except the Preferences panel's own open/close and
-   `BudgetMeter`'s fill. Candidates: page and route transitions, staggered entry for cards and
-   list rows, the nav's active-state indicator sliding rather than snapping, numeric hero figures
-   counting up on load rather than appearing instantly. Respect `prefers-reduced-motion`
-   throughout; `globals.css` already gates the existing transitions on it.
-2. **Variance.** Right now every screen reuses the same `.card` grid regardless of which design
-   is active. Each of the four directions has a distinct visual language (Field Ledger's hairline
-   rules and no card backgrounds; Raw Ledger's hard shadows and coloured card fills; Command
-   Ledger's bento-style density) that currently only shows up on the dashboard and budgets
-   screens, because those are the two `BudgetCard`/`StatTile` were fitted to. The other eight
-   screens inherit colour and type correctly but look visually flatter than the pitch promised.
-3. **Dead space.** Several screens (Goals, Simulator, Import) have generous unused margin at
-   normal viewport widths once the fixed-width sidebar/rail is accounted for. Each design's own
-   idiom should decide what fills it — Command Ledger might want a live secondary panel; Field
+**Recommended next task, set by the user 2 September 2026.** The visual design system's motion
+pass has now landed, but only for Vault Noir, and only on the Dashboard and Budgets screens — see
+"A motion layer landed" above for exactly what exists. What's left of the original three-part ask:
+
+1. ~~**Motion.**~~ Done for Vault Noir's Dashboard and Budgets. Not yet done: the other eight
+   screens (Transactions, Analytics, Insights, Calendar, Goals, Simulator, Import, Data), and any
+   motion at all for Field Ledger, Raw Ledger or Command Ledger — each of those three needs its
+   *own* motion language (Field's should feel like ink drying, not noir's slow brass fades reused
+   with different colours), not noir's rules re-scoped to a different `[data-design]` selector.
+2. **Variance.** Still only the dashboard and budgets screens show each design's distinct visual
+   language (Field Ledger's hairline rules and no card backgrounds; Raw Ledger's hard shadows and
+   coloured card fills; Command Ledger's bento-style density). The other eight screens inherit
+   colour and type correctly but look visually flatter than the pitch promised.
+3. **Dead space.** Vault Noir's rail dead-space is filled (tick marks, live clock, an ambient page
+   glow/grid). The equivalent for the other three designs' own chrome — and for screens beyond
+   Dashboard/Budgets in any design — is still open. Each design's own idiom should decide what
+   fills it, per the original brief: Command Ledger might want a live secondary panel; Field
    Ledger might want a wider single column with real margins rather than a centred narrow one.
 
 Everything else the earlier handoffs listed as outstanding has landed: `rollover_reset` has a
