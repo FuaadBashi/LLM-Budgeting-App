@@ -1,6 +1,6 @@
 # Handoff
 
-State of play as at 1 September 2026. Read [FINANCIAL_RULEBOOK.md](FINANCIAL_RULEBOOK.md) first —
+State of play as at 2 September 2026. Read [FINANCIAL_RULEBOOK.md](FINANCIAL_RULEBOOK.md) first —
 it is the contract, and where code disagrees with it that is a defect, not a variation.
 
 ---
@@ -22,9 +22,10 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 10 | Polish, backups, hosting | ◐ backups and exposure hardening done; the deploy itself is yours |
 | 11 | Assisted categorisation (LLM) | ✅ |
 
-**Phases 0–9 and 11 complete; Phase 10's backup half is done.** 667 tests. Deployment is the
-only substantial thing left, and `docs/RUNNING.md` already describes the setup worth having
-(Tailscale, real certificates, nothing exposed to the internet).
+**Phases 0–9 and 11 complete; Phase 10's backup half is done.** 674 tests. Deployment is the
+only substantial thing left from the original plan, and `docs/RUNNING.md` already describes the
+setup worth having (Tailscale, real certificates, nothing exposed to the internet) — but see
+"Recommended next task" below, which is not that.
 
 Frontend has ten screens — dashboard, transactions, analytics, insights, budgets, calendar,
 goals, simulator, import and data — and every nav item is live. Budgets, goals and commitments can all be created and edited from the UI.
@@ -33,6 +34,14 @@ transactions. The transactions screen
 lists history, shows each row's effect on liquid cash, and offers both correction paths: Void
 for a wrong amount or date, edit-in-place for a wrong description, merchant or category. Voided
 rows are hidden by default and never deleted.
+
+**A visual design system landed 2 September 2026.** Four complete design directions — Vault Noir,
+Field Ledger, Raw Ledger, Command Ledger, each with its own light and dark palette (eight
+palettes total) and its own desktop nav treatment (icon rail / masthead / floating dock / rail
+plus a functional jump-to bar) — are switchable from a Preferences control (the gear icon,
+bottom-left, on every screen) and persist across reloads. See "Frontend" below for where the
+system lives, and `docs/DECISIONS.md` for why it is built the way it is, including two real bugs
+found and fixed along the way that are worth reading before touching `lib/design.tsx` again.
 
 ---
 
@@ -56,7 +65,7 @@ live; routes only translate to and from integer minor units.
 | `domain/obligations.py` | Instance generation and transaction matching |
 | `domain/calendar.py` | Projected balance curve |
 | `domain/income.py` | Expected income occurrences, derived from the rule |
-| `domain/reimbursement.py` | Netting repayments out of budget spend |
+| `domain/reimbursement.py` | Netting repayments out of budget spend, by day and by merchant |
 | `domain/impact.py` | W3 -- what one transaction did to a budget |
 | `domain/analytics.py` | Period and monthly summaries |
 | `domain/restore.py` | Rebuilding the ledger from a JSON backup |
@@ -80,6 +89,76 @@ live; routes only translate to and from integer minor units.
 - `G1` — goal attribution cannot exceed its savings account balance (deferred trigger)
 - `B-CFG1/2` — daily budgets cannot roll over; a revision cannot predate its budget
 - CHECKs — anchor iff fortnightly, end ≥ start, no self-parent category, GBP-only postings
+
+### Frontend
+
+Next.js App Router, `frontend/src/`. Every file below exists; check here before grepping for
+where something lives.
+
+**Pages** (`app/`) — each is a server component that fetches its own data and renders inside
+`AppShell`:
+
+| File | Screen |
+|---|---|
+| `app/page.tsx` | Dashboard — the four KPI tiles, the projected balance curve, budget cards |
+| `app/transactions/page.tsx` | History, void, edit-in-place |
+| `app/analytics/page.tsx` | Period and monthly summaries, category bars |
+| `app/insights/page.tsx` | Observations with evidence, including merchant anomalies |
+| `app/budgets/page.tsx` | Budget list/create/edit, account default categories, this period's cards |
+| `app/calendar/page.tsx` | Projected balance curve, day by day |
+| `app/goals/page.tsx` | Savings goals list/create/edit |
+| `app/simulator/page.tsx` | Scenario list/create/compare, the projection chart |
+| `app/import/page.tsx` | Statement upload, one-by-one candidate triage, receipt photo |
+| `app/data/page.tsx` | Exports, JSON backup, restore, backup staleness status |
+| `app/layout.tsx` | Root layout: fonts (`lib/fonts.ts`), `DesignProvider`, `<html>`/`<body>` |
+| `app/globals.css` | Every design token (see below), `.card`/`.form-control`/`.font-display` |
+| `app/manifest.ts` | PWA installability — why receipt capture can reach for a camera |
+
+**Components** (`components/`):
+
+| File | Responsibility |
+|---|---|
+| `AppShell.tsx` | Nav chrome for all four designs (rail / masthead / dock / rail+command-bar); mobile top bar and bottom tabs, identical across designs |
+| `PreferencesPanel.tsx` | The gear-icon control: pick a design, pick System/Light/Dark |
+| `StatTile.tsx` | Label + value + optional support/footnote; `lead` marks the one hero figure per screen |
+| `BudgetCard.tsx` | One budget period: meter, warnings (including merchant anomaly), the "where this comes from" breakdown |
+| `BudgetManager.tsx` | Budget list, creation form, inline edit (amount, rollover policy, rollover reset) |
+| `BudgetMeter.tsx` | The spent/allowance progress bar `BudgetCard` renders |
+| `AccountDefaults.tsx` | Per-account default-category editor, on the Budgets screen |
+| `GoalManager.tsx` | Goals list, creation form, inline edit |
+| `ObligationManager.tsx` | Commitments list, creation form, inline edit |
+| `ScenarioManager.tsx` | Scenario list, creation, compare, delete |
+| `ScenarioChart.tsx` | The simulator's projection chart (mind the aqua-on-light note in Traps) |
+| `BalanceCurve.tsx` | The dashboard/calendar projected balance chart, hover for day detail |
+| `CategoryBars.tsx` | Spend-by-category ranked bars (Analytics) |
+| `MonthlyBars.tsx` | Month-over-month spend bars (Analytics) |
+| `InsightPanel.tsx` | Renders one `Insight`: title, evidence, action |
+| `TransactionEntry.tsx` | The "Add" modal — expense/income/transfer/refund as balanced two-leg postings; `iconOnly` prop for narrow nav rails |
+| `TransactionList.tsx` | Transaction history table: void, edit-in-place |
+| `InlineEditor.tsx` | Shared edit-in-place form behind budgets/goals/obligations/accounts — one component so the three behave identically |
+| `ImportInbox.tsx` | Statement upload, receipt photo upload, candidate list |
+| `TriageDeck.tsx` | One-by-one accept/reject for import candidates |
+| `DataManager.tsx` | Export buttons (CSV/JSON/XLSX/PDF), backup download, restore with preview |
+| `BackupPanel.tsx` | Backup staleness/status shown on the Data screen |
+| `LoginGate.tsx` | The password form shown when a session is required and missing |
+
+**Lib** (`lib/`):
+
+| File | Responsibility |
+|---|---|
+| `api.ts` | Typed fetch wrappers for every backend route; `forwardedCookies` for server-side auth |
+| `money.ts` | `formatMinor`, `parseMajorToMinor` — minor units at the boundary, never a float |
+| `guard.tsx` | `requireSession()` — server-side auth check every page calls before rendering |
+| `design.tsx` | `DesignProvider`/`useDesign()` — the four-design, light/dark/system state machine. **Read the comment above `DesignProvider` before changing initial-state logic** — it explains two hydration bugs already found there |
+| `fonts.ts` | `next/font/google` loaders for the four design typefaces (Fraunces, Instrument Serif, Archivo, IBM Plex Mono), exposed as CSS variables |
+
+**The design-token system**, in `globals.css`: every component styles against the same variable
+names (`--surface-1`, `--text-primary`, `--accent`, `--radius`, `--font-display`, ...) regardless
+of which design is active. Colour tokens are keyed by `[data-design="x"][data-theme="y"]`; shape
+tokens (radius, border weight, which typeface plays which role) are keyed by `[data-design="x"]`
+alone, since they do not change between light and dark. `<html>` carries both attributes, written
+by `DesignProvider` — nowhere else. See `docs/DECISIONS.md`'s design-system entry for why the
+values are what they are and what the four are named.
 
 ---
 
@@ -110,13 +189,16 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X18 | No model output can become a figure — only an existing category (A1) | ✅ `test_enrichment.py` — invented categories and numeric answers both resolve to none |
 | X19 | The app is unchanged with no API key (A3) | ✅ `test_enrichment.py` — import works, no network, no error |
 | X20 | A receipt reaches the ledger only through the candidate inbox (A1') | ✅ `test_receipts.py` — staging leaves balances and transaction count untouched |
-| X21 | The merchant baseline reads the same postings `Spent` does | ✅ Shared `_legs_in_scope` selector plus `test_merchant_anomaly.py::test_the_baseline_reads_the_same_postings_budget_spent_does` |
+| X21 | The merchant baseline reads the same postings `Spent` does, netted the same way | ✅ Shared `_legs_in_scope` selector for scope; shared `reimbursement._offsets` walk for netting. `test_merchant_anomaly.py::test_the_baseline_reads_the_same_postings_budget_spent_does` and `::test_a_fully_reimbursed_trip_does_not_trip_the_merchant_warning` |
 | X22 | An account default is stamped on the write, never derived on the read | ✅ `test_account_defaults.py` — changing a default leaves written postings alone, and a restore reproduces the file |
 
 ### Assisted categorisation and receipt reading (Phases 7 and 11)
 
-**Off by default.** `LLM_PROVIDER=none` means no model feature runs and nothing is called. A key
-left in `.env` does not switch anything on — choosing a provider is the deliberate act.
+**Off by default, on here.** `LLM_PROVIDER=none` means no model feature runs and nothing is
+called. A key left in `.env` does not switch anything on — choosing a provider is the deliberate
+act, and this install has made it: `LLM_PROVIDER=openai_compatible` against a local Ollama with
+`llama3.2` (categorisation) and `llama3.2-vision` (receipts) pulled, so merchant names never
+leave the machine.
 
 | Provider | `LLM_PROVIDER` | Notes |
 |---|---|---|
@@ -134,16 +216,33 @@ The cost design is the cache, not the prompt. `merchant_suggestions` is keyed on
 `TESCO STORES 3421` collapses to one row and one question. A merchant is asked about once, ever;
 a user correction is stored as theirs and outranks the model permanently (A2).
 
-**Recommended next task.** The deploy, which needs your decisions rather than more code. The
-smallest version that works is in `docs/RUNNING.md`: `tailscale serve --bg 3000`, then
-`COOKIE_SECURE=true`. `deploy/` covers a public domain instead, which is more work and more
-exposure than a personal ledger usually justifies.
+**Recommended next task, set by the user 2 September 2026.** Not the deploy — continue the
+visual design system. Four directions now exist and switch cleanly; the explicit ask is motion,
+more variance between screens, and deliberate use of empty space, aimed at reading as distinctly
+modern rather than a reskinned default. Concretely, in order of what is likely to matter most:
+
+1. **Motion.** Nothing currently animates except the Preferences panel's own open/close and
+   `BudgetMeter`'s fill. Candidates: page and route transitions, staggered entry for cards and
+   list rows, the nav's active-state indicator sliding rather than snapping, numeric hero figures
+   counting up on load rather than appearing instantly. Respect `prefers-reduced-motion`
+   throughout; `globals.css` already gates the existing transitions on it.
+2. **Variance.** Right now every screen reuses the same `.card` grid regardless of which design
+   is active. Each of the four directions has a distinct visual language (Field Ledger's hairline
+   rules and no card backgrounds; Raw Ledger's hard shadows and coloured card fills; Command
+   Ledger's bento-style density) that currently only shows up on the dashboard and budgets
+   screens, because those are the two `BudgetCard`/`StatTile` were fitted to. The other eight
+   screens inherit colour and type correctly but look visually flatter than the pitch promised.
+3. **Dead space.** Several screens (Goals, Simulator, Import) have generous unused margin at
+   normal viewport widths once the fixed-width sidebar/rail is accounted for. Each design's own
+   idiom should decide what fills it — Command Ledger might want a live secondary panel; Field
+   Ledger might want a wider single column with real margins rather than a centred narrow one.
 
 Everything else the earlier handoffs listed as outstanding has landed: `rollover_reset` has a
 control on the budgets screen, transactions can be edited for their non-monetary fields, receipt
 vision reads a photograph into the candidate inbox, and the two rollover defects an adversarial
 review found are closed with named tests. The correctness and security debt below are both
-empty.
+empty. The deploy itself (`docs/RUNNING.md` / `deploy/`) is unchanged and still waiting whenever
+it becomes the priority again.
 
 ---
 
@@ -317,6 +416,14 @@ These are bugs already found and fixed. They will come back if the reasoning is 
 - **Absence is not a zero.** A merchant that did not appear in a period contributes no
   observation to its baseline. Filling the gap with zero drags the median down until the next
   ordinary purchase looks extraordinary.
+- **The merchant baseline shipped once without reimbursement netting.** `chain()`'s `Spent`
+  nets a repaid expense to zero; `merchant_spend_by_booking_date` did not, so a fully reimbursed
+  £600 trip could fire `merchant_anomaly` over money the budget itself already reads as £0. Found
+  in review, not by the first round of tests -- `test_the_baseline_reads_the_same_postings...`
+  covered scope agreement but not netting agreement, which is a different claim. Fixed by
+  `reimbursement._offsets`, one walk over the reimbursements both `netting_by_booking_date` and
+  the new `merchant_netting_by_booking_date` read from, so they cannot drift apart the way the
+  original two independent queries did.
 - **An account default is stamped on the write, never applied on the read.** Deriving it at read
   time would silently recategorise every historical untagged posting the moment the default
   changed — last March's essential rent becoming discretionary, with nothing on screen saying so.
@@ -325,6 +432,28 @@ These are bugs already found and fixed. They will come back if the reasoning is 
   optional one precisely so a caller cannot forget it: a `None` default would downgrade the
   merchant warning to `not_evaluated` silently, which is the quietest possible way to lose a
   warning. `budget_routes` fetches once for the whole chain, never once per period.
+- **Never read `localStorage` inside a `useState` initializer.** `DesignProvider` first tried it,
+  and it threw a hard hydration failure on every returning visitor whose stored design differed
+  from the default. The initializer runs on the client's very first render, before hydration
+  reconciles anything — so a stored non-default choice made that first render produce a
+  *structurally different component tree* (a masthead instead of an icon rail) than the one the
+  server sent down. That is not an attribute mismatch `suppressHydrationWarning` can absorb; React
+  discards the whole SSR output and re-renders from scratch. State must start at the same default
+  on server and client alike, with the stored value applied only inside a post-mount
+  `useLayoutEffect` — the honest cost is a single-frame flash of the default on a cold load, not
+  the zero-flash a blocking script would have given.
+- **A literal `<script>` element in the App Router root layout's `<body>` broke hydration outright
+  in this Next.js/Turbopack combination.** Every variant was tried — `next/script` at every
+  strategy, a raw `dangerouslySetInnerHTML` tag, with and without `async`, inside a manual `<head>`
+  and inside `<body>` — and all of them threw "Encountered a script tag while rendering React
+  component" on every load. This is why `lib/design.tsx` reads storage in an effect instead of a
+  blocking boot script the way most theme-switchers do; do not reintroduce one without confirming
+  this was a version-specific bug that has since been fixed upstream.
+- **A stale browser console buffer looks exactly like a real bug.** Debugging the two traps above
+  took far longer than it should have because `read_console_messages`-style tools return
+  accumulated history, not just the latest reload's output — a fix that worked read as broken
+  because the previous failure was still sitting in the buffer. Test hydration/boot-sequence
+  changes in a genuinely new tab, not a reloaded one, or the wrong fix gets abandoned.
 
 ---
 

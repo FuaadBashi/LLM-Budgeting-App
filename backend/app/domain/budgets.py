@@ -37,7 +37,10 @@ from app.domain.periods import (
     prev_period,
 )
 from app.domain.projection import Projection, project
-from app.domain.reimbursement import netting_by_booking_date
+from app.domain.reimbursement import (
+    merchant_netting_by_booking_date,
+    netting_by_booking_date,
+)
 from app.domain.spend import (
     merchant_spend_by_booking_date,
     spend_by_booking_date,
@@ -365,9 +368,16 @@ def merchant_history(
 ) -> MerchantHistory:
     """Merchant totals covering every period in ``results`` and their baselines.
 
-    One query for the whole chain. Fetching per period instead would make the
-    budgets screen O(n) queries in its own history -- the exact cost :func:`chain`
-    is written to avoid, reintroduced by the warning that reads it.
+    One query pair for the whole chain (spend, then reimbursement offsets) rather
+    than per period -- fetching per period would make the budgets screen O(n)
+    queries in its own history, the exact cost :func:`chain` is written to avoid,
+    reintroduced by the warning that reads it.
+
+    Netted the same way :func:`chain` nets ``Spent``: a work trip repaid in full
+    is not spending, whichever engine is asked. Without this the merchant
+    baseline read raw expense totals while the budget it sits on read netted
+    ones, and a fully reimbursed trip could trip the anomaly warning over money
+    the ledger itself treats as zero.
     """
     if not results:
         return MerchantHistory([])
@@ -376,11 +386,15 @@ def merchant_history(
     for _ in range(BASELINE_PERIODS):
         earliest = prev_period(budget.period, earliest, budget.anchor_date)
 
-    return MerchantHistory(
-        merchant_spend_by_booking_date(
-            session, budget.category_id, earliest.start, results[-1].period_end
-        )
+    horizon_start, horizon_end = earliest.start, results[-1].period_end
+    spend_rows = merchant_spend_by_booking_date(
+        session, budget.category_id, horizon_start, horizon_end
     )
+    offset_rows, _excess = merchant_netting_by_booking_date(
+        session, budget.category_id, horizon_start, horizon_end
+    )
+    netted = [(m, d, -amount) for m, d, amount in offset_rows]
+    return MerchantHistory(spend_rows + netted)
 
 
 def enrich(

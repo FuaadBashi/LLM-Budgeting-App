@@ -1,21 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { useRouter, usePathname } from "next/navigation";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { PreferencesPanel } from "@/components/PreferencesPanel";
 import { TransactionEntry } from "@/components/TransactionEntry";
+import { useDesign, type Design } from "@/lib/design";
 
 /**
  * Navigation chrome. Plan section 11.1.
  *
- * Left sidebar with a persistent Add action on desktop; bottom navigation plus a
- * floating Add on mobile. The Add action is deliberately prominent in both --
- * section 11.3 is explicit that recording money activity must never require
- * hunting through settings.
+ * Four structurally different desktop treatments, one per design direction
+ * (see PreferencesPanel) -- an icon rail, a masthead, a floating dock, a
+ * rail with a command bar -- switching on `useDesign().design`. Mobile stays
+ * ONE layout across all four (top bar + bottom tabs, just retokened): the
+ * four nav placements are a desktop pitch, and reinventing mobile four times
+ * over risked four times the mobile-specific bugs for a screen size the
+ * comparison was never designed against.
  *
- * Screens beyond the dashboard are not built yet, so their links are rendered as
- * disabled rather than as dead links. A nav item that looks live and does nothing
- * is worse than one that says it is coming.
+ * The Add action is deliberately prominent in every treatment -- section
+ * 11.3 is explicit that recording money activity must never require hunting
+ * through settings.
+ *
+ * Screens beyond the dashboard are not built yet, so their links are rendered
+ * as disabled rather than as dead links. A nav item that looks live and does
+ * nothing is worse than one that says it is coming.
  */
 
 type Item = { key: string; label: string; icon: ReactNode; href?: string };
@@ -34,37 +43,29 @@ const NAV: Item[] = [
   { key: "data", label: "Data", icon: <IconArchive />, href: "/data" },
 ];
 
+//: How far the content column has to move over/under for each design's
+//: OWN fixed chrome. Field's masthead is `sticky`, not `fixed`, so it needs
+//: none of this -- it already pushes content down by taking up flow space.
+const CONTENT_OFFSET: Record<Design, string> = {
+  noir: "lg:pl-16",
+  field: "",
+  raw: "lg:pb-28",
+  console: "lg:pl-14",
+};
+
 export function AppShell({ children }: { children: ReactNode }) {
+  const { design } = useDesign();
+
   return (
     <div className="min-h-dvh" style={{ background: "var(--page-plane)" }}>
-      {/* Desktop sidebar */}
-      <aside
-        className="fixed inset-y-0 left-0 hidden w-60 flex-col border-r px-4 py-6 lg:flex"
-        style={{ borderColor: "var(--hairline)", background: "var(--surface-1)" }}
-      >
-        <div className="mb-8 px-2">
-          <div
-            className="text-sm font-semibold"
-            style={{ color: "var(--text-primary)" }}
-          >
-            Personal Finance OS
-          </div>
-          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Ledger-first
-          </div>
-        </div>
+      {design === "noir" && <RailNav design="noir" />}
+      {design === "console" && <RailNav design="console" />}
+      {design === "raw" && <DockNav />}
 
-        <nav className="flex flex-1 flex-col gap-1">
-          {NAV.map((item) => (
-            <SidebarLink key={item.key} item={item} />
-          ))}
-        </nav>
+      <div className={`${CONTENT_OFFSET[design]} lg:flex lg:min-h-dvh lg:flex-col`}>
+        {design === "field" && <MastheadNav />}
 
-        <TransactionEntry className="mt-4 w-full justify-center" />
-      </aside>
-
-      <div className="lg:pl-60">
-        {/* Mobile top bar */}
+        {/* Mobile top bar -- identical across all four designs. */}
         <header
           className="sticky top-0 z-10 flex items-center justify-between border-b px-4 py-3 backdrop-blur lg:hidden"
           style={{
@@ -72,19 +73,18 @@ export function AppShell({ children }: { children: ReactNode }) {
             background: "color-mix(in oklab, var(--surface-1) 88%, transparent)",
           }}
         >
-          <span
-            className="text-sm font-semibold"
-            style={{ color: "var(--text-primary)" }}
-          >
+          <span className="font-display text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
             Personal Finance OS
           </span>
         </header>
 
+        {design === "console" && <CommandBar />}
+
         {/* Bottom padding clears the mobile nav bar. */}
-        <div className="pb-28 lg:pb-10">{children}</div>
+        <div className="flex-1 pb-28 lg:pb-10">{children}</div>
       </div>
 
-      {/* Mobile bottom navigation */}
+      {/* Mobile bottom navigation -- identical across all four designs. */}
       <nav
         className="fixed inset-x-0 bottom-0 z-10 flex items-stretch border-t lg:hidden"
         style={{
@@ -99,6 +99,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </nav>
 
       <TransactionEntry className="fixed bottom-20 right-4 z-20 shadow-lg lg:hidden" />
+      <PreferencesPanel />
     </div>
   );
 }
@@ -109,22 +110,62 @@ function useIsCurrent(href?: string) {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
-function SidebarLink({ item }: { item: Item }) {
+/* ============================================================
+   A. Vault Noir / D. Command Ledger -- a fixed left icon rail.
+   Same shape, different trim: Console adds numbering instead of
+   icons and a brand mark is deliberately absent (see file header).
+   ============================================================ */
+
+function RailNav({ design }: { design: "noir" | "console" }) {
+  const width = design === "noir" ? "w-16" : "w-14";
+  return (
+    <aside
+      className={`fixed inset-y-0 left-0 hidden ${width} flex-col items-center gap-1 border-r py-6 lg:flex`}
+      style={{ borderColor: "var(--hairline)", background: "var(--page-plane)" }}
+    >
+      {design === "noir" && (
+        <div
+          className="font-display mb-5 text-sm"
+          style={{ color: "var(--accent)" }}
+          aria-hidden
+        >
+          PFOS
+        </div>
+      )}
+      <nav className="flex flex-1 flex-col items-center gap-1">
+        {NAV.map((item, i) => (
+          <RailLink key={item.key} item={item} index={i} numbered={design === "console"} />
+        ))}
+      </nav>
+      <TransactionEntry iconOnly className="mt-2" />
+    </aside>
+  );
+}
+
+function RailLink({
+  item,
+  index,
+  numbered,
+}: {
+  item: Item;
+  index: number;
+  numbered: boolean;
+}) {
   const current = useIsCurrent(item.href);
-  const className =
-    "navlink flex items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2 text-sm font-medium";
+  const className = "navlink flex h-10 w-10 items-center justify-center rounded-[var(--radius-sm)]";
+  const style = current
+    ? { background: "var(--accent-soft)", color: "var(--accent)" }
+    : { color: "var(--text-muted)" };
+  const content = numbered ? (
+    <span className="font-display text-[11px]">{String(index + 1).padStart(2, "0")}</span>
+  ) : (
+    item.icon
+  );
 
   if (!item.href) {
     return (
-      <span
-        className={className}
-        style={{ color: "var(--text-muted)" }}
-        aria-disabled
-        title="Not built yet"
-      >
-        {item.icon}
-        {item.label}
-        <span className="ml-auto text-[10px] uppercase tracking-wide">soon</span>
+      <span className={className} style={style} aria-disabled title={`${item.label} — not built yet`}>
+        {content}
       </span>
     );
   }
@@ -132,18 +173,170 @@ function SidebarLink({ item }: { item: Item }) {
     <Link
       href={item.href}
       className={className}
+      style={style}
       aria-current={current ? "page" : undefined}
-      style={
-        current
-          ? { background: "var(--accent-soft)", color: "var(--accent)" }
-          : { color: "var(--text-secondary)" }
-      }
+      title={item.label}
     >
-      {item.icon}
+      {content}
+    </Link>
+  );
+}
+
+/* ============================================================
+   B. Field Ledger -- a masthead. In normal flow (sticky, not
+   fixed), so it needs no compensating padding on the content
+   below it -- unlike the other three, which float over the page.
+   ============================================================ */
+
+function MastheadNav() {
+  return (
+    <header
+      className="sticky top-0 z-10 hidden items-center gap-7 border-b px-8 lg:flex"
+      style={{ height: 56, borderColor: "var(--text-primary)", borderBottomWidth: 2, background: "var(--page-plane)" }}
+    >
+      <span className="font-display mr-auto text-lg italic" style={{ color: "var(--text-primary)" }}>
+        Personal Finance OS
+      </span>
+      {NAV.map((item) => (
+        <MastheadLink key={item.key} item={item} />
+      ))}
+      <TransactionEntry className="text-xs" />
+    </header>
+  );
+}
+
+function MastheadLink({ item }: { item: Item }) {
+  const current = useIsCurrent(item.href);
+  const className = "navlink whitespace-nowrap border-b-2 pb-1 text-[11.5px] tracking-wide";
+  const style = {
+    color: current ? "var(--text-primary)" : "var(--text-muted)",
+    borderColor: current ? "var(--accent)" : "transparent",
+  };
+
+  if (!item.href) {
+    return (
+      <span className={className} style={{ ...style, color: "var(--text-muted)" }} aria-disabled title="Not built yet">
+        {item.label}
+      </span>
+    );
+  }
+  return (
+    <Link href={item.href} className={className} style={style} aria-current={current ? "page" : undefined}>
       {item.label}
     </Link>
   );
 }
+
+/* ============================================================
+   C. Raw Ledger -- a floating bottom dock. Fixed and centred, so
+   it overlays the page rather than taking up flow space -- the
+   content column gets extra bottom padding instead (CONTENT_OFFSET).
+   ============================================================ */
+
+function DockNav() {
+  return (
+    <nav
+      className="fixed bottom-6 left-1/2 z-20 hidden -translate-x-1/2 items-center gap-1 p-1.5 lg:flex"
+      style={{ background: "var(--text-primary)", boxShadow: "var(--shadow-raised)" }}
+      aria-label="Primary"
+    >
+      {NAV.map((item) => (
+        <DockLink key={item.key} item={item} />
+      ))}
+      <TransactionEntry iconOnly className="ml-1 !rounded-none" />
+    </nav>
+  );
+}
+
+function DockLink({ item }: { item: Item }) {
+  const current = useIsCurrent(item.href);
+  const className = "flex h-9 w-9 items-center justify-center";
+  const style = current
+    ? { background: "var(--accent)", color: "var(--page-plane)" }
+    : { color: "var(--page-plane)" };
+
+  if (!item.href) {
+    return (
+      <span className={className} style={{ color: "var(--text-muted)" }} aria-disabled title={`${item.label} — not built yet`}>
+        {item.icon}
+      </span>
+    );
+  }
+  return (
+    <Link href={item.href} className={className} style={style} aria-current={current ? "page" : undefined} title={item.label}>
+      {item.icon}
+    </Link>
+  );
+}
+
+/* ============================================================
+   Command Ledger's jump bar. A real filter over the same NAV
+   list every other treatment links to, not a decorative prop --
+   Enter or a click navigates like any other nav control does.
+   ============================================================ */
+
+function CommandBar() {
+  const router = useRouter();
+  const [query, setQuery] = useState("");
+
+  const matches = useMemo(() => {
+    if (!query.trim()) return [];
+    const q = query.trim().toLowerCase();
+    return NAV.filter((item) => item.href && item.label.toLowerCase().includes(q));
+  }, [query]);
+
+  function go(href: string) {
+    router.push(href);
+    setQuery("");
+  }
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (matches[0]?.href) go(matches[0].href);
+  }
+
+  return (
+    <div className="relative hidden px-8 pt-6 lg:block">
+      <form onSubmit={onSubmit} className="flex items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2" style={{ background: "var(--surface-1)", boxShadow: "inset 0 0 0 var(--border-w) var(--hairline)" }}>
+        <span className="font-display text-sm" style={{ color: "var(--text-muted)" }} aria-hidden>
+          &gt;
+        </span>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Jump to a budget, goal or transaction…"
+          aria-label="Jump to a screen"
+          className="w-full bg-transparent text-sm outline-none"
+          style={{ color: "var(--text-primary)" }}
+        />
+      </form>
+      {matches.length > 0 && (
+        <ul
+          className="absolute left-8 right-8 top-full z-10 mt-1 overflow-hidden rounded-[var(--radius-sm)]"
+          style={{ background: "var(--surface-1)", boxShadow: "inset 0 0 0 var(--border-w) var(--hairline), var(--shadow-raised)" }}
+        >
+          {matches.map((m) => (
+            <li key={m.key}>
+              <button
+                type="button"
+                onClick={() => go(m.href!)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:opacity-80"
+                style={{ color: "var(--text-primary)" }}
+              >
+                {m.icon}
+                {m.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   Mobile bottom navigation -- shared by every design.
+   ============================================================ */
 
 function BottomLink({ item }: { item: Item }) {
   const current = useIsCurrent(item.href);

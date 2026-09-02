@@ -32,8 +32,8 @@ Decided 30 August 2026.
 |---|---|---|
 | 11 | Contributions only, or holdings and market values? | *Deferred.* Contributions only; `investment` accounts hold a cash-equivalent balance. Market valuation is a Phase 8+ concern. |
 | 12 | Do contributions count against safe-to-spend immediately? | **Yes**, treated identically to savings under §4 of the rulebook. |
-| 13 | Default return assumptions? | *Deferred to Phase 8.* Plan §9.4 requires conservative/base/optimistic rather than a single figure. |
-| 14 | Nominal or inflation-adjusted projections? | *Deferred to Phase 8.* Default nominal, with inflation as an explicit toggle. |
+| 13 | Default return assumptions? | **Decided, implemented in Phase 8.** `conservative` 2%, `base` 5%, `optimistic` 8% annual, in `simulation.RETURN_CASES`. Ordinary long-run assumptions for a diversified portfolio — not tuned to any specific fund — and the three-case spread means no scenario quotes a single number as if it were certain. Changeable in one place if real performance suggests otherwise. |
+| 14 | Nominal or inflation-adjusted projections? | **Decided, implemented in Phase 8.** Nominal by default; `annual_inflation` is an explicit per-scenario field, not a global setting — so a projection is inflation-adjusted only when someone deliberately asked the question, and two people comparing scenarios are never silently comparing a real figure to a nominal one. |
 
 ## D. Imports and automation
 
@@ -336,3 +336,82 @@ group by a fortnight measured from an arbitrary anchor, and `EXTRACT(DOW)` is
 Sunday-based where `date.weekday()` is Monday-based. A SQL-side grouping would be
 right for two of the six period kinds and quietly wrong for the other four, which
 is the same reasoning `periods.py` already records.
+
+**Reimbursement netting reaches the baseline too, found by review rather than by
+the first round of tests.** `chain()` nets a repaid expense out of `Spent`
+(engine spec M3); the first version of `merchant_spend_by_booking_date` did not,
+so a work trip repaid in full could still fire `merchant_anomaly` over money the
+budget itself already reports as £0.00. The two figures had passed the scope
+check -- the same categories, the same posting kind -- while disagreeing about
+netting, which is a different claim and needs its own guard.
+
+Fixed by extracting `reimbursement._offsets`, the single walk over in-window
+reimbursements that both `netting_by_booking_date` (bucketed by day) and
+`merchant_netting_by_booking_date` (bucketed by merchant and day) now read from.
+Merchant is a `Transaction` field, not a `Posting` one, so every expense leg of
+one reimbursed transaction shares a merchant and there is no per-leg ambiguity to
+resolve in the split.
+
+## Visual design system: four directions, switchable. Decided 2 September 2026
+
+The dashboard-only design pitch from earlier the same day became four complete,
+switchable directions across the whole app: **Vault Noir** (quiet, dark,
+expensive — brass accent, never the generic acid-green-on-black), **Field
+Ledger** (a financial paper, not an app — hairline rules, italic serif, no
+rounded corners), **Raw Ledger** (loud, honest, hard-edged — neo-brutalist,
+solid offset shadows), **Command Ledger** (an engineered console — monospace
+throughout, a functional jump-to bar in place of a nav item). Each carries its
+own light *and* dark palette, chosen from a Preferences control (the gear icon,
+every screen) and persisted in `localStorage`.
+
+**Every design reuses the same token names, never a parallel system.**
+`--surface-1`, `--text-primary`, `--accent`, `--radius`, `--font-display` and
+the rest are the identical variables every component already styled against
+before this existed. Switching design is therefore never a per-component
+change: it is redefining what those names resolve to, in `globals.css`, keyed
+by `[data-design="x"][data-theme="y"]` for colour and `[data-design="x"]` alone
+for shape (radius, border weight, which typeface plays which role) — shape does
+not change between light and dark, so it does not need the second key.
+
+**Mobile stays one layout across all four designs, deliberately.** The four
+structural nav treatments — icon rail, masthead, floating dock, rail with a
+command bar — are a desktop pitch; reinventing mobile navigation four times
+over was judged not worth four times the mobile-specific bugs for a screen
+width the comparison was never designed against. Mobile keeps the existing top
+bar and bottom tabs, re-tokened like everything else, across all four.
+
+**The Command Ledger jump bar is real navigation, not decoration.** It filters
+the same nav list every other treatment links to and calls `router.push` on a
+match — building it as a static prop would have been a half-finished
+implementation of the one thing that makes "an engineered console" a real
+pitch rather than a colour scheme.
+
+### Two bugs, found building this, worth reading before touching `lib/design.tsx`
+
+**Reading `localStorage` inside a `useState` initializer breaks hydration
+structurally, not cosmetically.** The initializer only runs on the client, so
+on a returning visitor with a saved non-default choice, the client's *first*
+render — before hydration has reconciled anything — already produces a
+different component tree than the server sent: Field Ledger's masthead where
+the server rendered Vault Noir's icon rail. That is two different subtrees,
+not a mismatched attribute, and `suppressHydrationWarning` does not reach it —
+React discards the SSR output and re-renders the entire thing from scratch on
+the client. The fix is to start state at the same default on both sides,
+always, and apply the stored value only inside a `useLayoutEffect` that runs
+after mount. The honest cost is a single-frame flash of the default on a cold
+load, in exchange for never disagreeing with the server.
+
+**A blocking anti-flash `<script>` was tried first, and abandoned rather than
+debugged further.** The standard zero-flash pattern — a script in `<head>`
+that stamps `data-design`/`data-theme` onto `<html>` before hydration — is what
+every mainstream theme-switcher does, and it reliably threw "Encountered a
+script tag while rendering React component" in this Next.js/Turbopack
+combination regardless of approach: `next/script` at every strategy, a raw
+`dangerouslySetInnerHTML` tag, with and without `async`, inside a manual
+`<head>` and inside `<body>`. Confirming this took longer than it should have,
+because the browser console's message buffer accumulates across reloads rather
+than resetting — a fix that had actually worked kept reading as broken because
+the previous failure's messages were still sitting in the buffer, until testing
+moved to a genuinely fresh tab each time. The `useLayoutEffect` approach above
+was chosen once the blocking-script family of fixes was confirmed broken at the
+framework level, not because it is the better pattern in principle.

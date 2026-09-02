@@ -54,7 +54,16 @@ function accountChoices(accounts: Account[], kind: EntryKind) {
   return { source, destination };
 }
 
-export function TransactionEntry({ className = "" }: { className?: string }) {
+export function TransactionEntry({
+  className = "",
+  iconOnly = false,
+}: {
+  className?: string;
+  //: For a nav rail too narrow for "+ Add" -- the icon rails in Vault Noir
+  //: and Command Ledger. The label stays for screen readers rather than
+  //: disappearing with the text.
+  iconOnly?: boolean;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -171,9 +180,14 @@ export function TransactionEntry({ className = "" }: { className?: string }) {
       <button
         type="button"
         onClick={() => void openForm()}
-        className={`flex items-center gap-2 rounded-full px-4 py-3 text-sm font-medium transition-opacity hover:opacity-90 ${className}`}
+        className={
+          iconOnly
+            ? `flex items-center justify-center rounded-full p-3 transition-opacity hover:opacity-90 ${className}`
+            : `flex items-center gap-2 rounded-full px-4 py-3 text-sm font-medium transition-opacity hover:opacity-90 ${className}`
+        }
         style={{ background: "var(--accent)", color: "#ffffff" }}
         aria-haspopup="dialog"
+        aria-label={iconOnly ? "Add" : undefined}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden fill="none">
           <path
@@ -183,7 +197,7 @@ export function TransactionEntry({ className = "" }: { className?: string }) {
             strokeLinecap="round"
           />
         </svg>
-        Add
+        {iconOnly ? <span className="sr-only">Add</span> : "Add"}
       </button>
 
       {notice && (

@@ -31,7 +31,7 @@ export default async function TransactionsPage({
         <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1
-              className="text-xl font-semibold sm:text-2xl"
+              className="font-display text-xl sm:text-2xl"
               style={{ color: "var(--text-primary)" }}
             >
               Transactions

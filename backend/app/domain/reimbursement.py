@@ -76,23 +76,22 @@ def _reimbursed_amount(session: Session, txn: Transaction) -> Decimal:
     return -total
 
 
-def netting_by_booking_date(
-    session: Session,
-    category_id: uuid.UUID | None,
-    start: date,
-    end: date,
-) -> tuple[list[tuple[date, Decimal]], Decimal]:
-    """Reimbursement offsets in scope, and any excess that is not spend.
+def _offsets(
+    session: Session, category_id: uuid.UUID | None, start: date, end: date
+):
+    """Walk every reimbursement in the window once, yielding what it actually
+    offset. The single source both netting views below are read from -- a
+    second, similar-looking walk over the same reimbursements would drift the
+    moment one of them changed, which is exactly what happened here before
+    :func:`merchant_netting_by_booking_date` existed: the merchant baseline read
+    raw expense totals while the budget engine read the netted ones, and a fully
+    reimbursed trip could trip the anomaly warning for spend the ledger itself
+    treats as zero.
 
-    Returns ``(daily_offsets, excess)``. Offsets are bucketed by the
-    **reimbursement's own** booking date, matching the as-booked rule refunds
-    follow -- money coming back in September is September's news, whatever month
-    the original expense sat in.
-
-    Each link is capped at the original leg amount. Being repaid more than was
-    spent is income, not negative spending, and letting it through would let an
-    over-payment manufacture budget. The surplus is returned separately so it can
-    be reported rather than silently dropped.
+    Yields ``(original_transaction, posting, applied, reimbursement_booking_date)``
+    for every expense leg an in-window reimbursement actually offset, plus
+    accumulates any excess (repaid beyond what was spent, which is income rather
+    than negative spending) onto the returned running total.
     """
     ids = scope_ids(session, category_id)
 
@@ -102,7 +101,6 @@ def netting_by_booking_date(
         .where(Transaction.id.in_(posted_transaction_ids(start=start, end=end)))
     ).all()
 
-    daily: dict[date, Decimal] = defaultdict(lambda: ZERO)
     excess = ZERO
 
     for reimbursement in reimbursements:
@@ -138,9 +136,60 @@ def netting_by_booking_date(
                 continue
             if not _in_scope(session, posting, ids):
                 continue
-            daily[reimbursement.booking_date] += applied
+            yield original, posting, applied, reimbursement.booking_date
 
-    return sorted(daily.items()), excess
+    return excess
+
+
+def netting_by_booking_date(
+    session: Session,
+    category_id: uuid.UUID | None,
+    start: date,
+    end: date,
+) -> tuple[list[tuple[date, Decimal]], Decimal]:
+    """Reimbursement offsets in scope, and any excess that is not spend.
+
+    Returns ``(daily_offsets, excess)``. Offsets are bucketed by the
+    **reimbursement's own** booking date, matching the as-booked rule refunds
+    follow -- money coming back in September is September's news, whatever month
+    the original expense sat in.
+    """
+    daily: dict[date, Decimal] = defaultdict(lambda: ZERO)
+    walk = _offsets(session, category_id, start, end)
+    while True:
+        try:
+            _original, _posting, applied, when = next(walk)
+        except StopIteration as stop:
+            return sorted(daily.items()), stop.value
+        daily[when] += applied
+
+
+def merchant_netting_by_booking_date(
+    session: Session,
+    category_id: uuid.UUID | None,
+    start: date,
+    end: date,
+) -> tuple[list[tuple[str, date, Decimal]], Decimal]:
+    """The same offsets as :func:`netting_by_booking_date`, split by merchant.
+
+    ``merchant`` lives on ``Transaction``, not ``Posting``, so every expense leg
+    of one original transaction shares one merchant -- there is no per-leg
+    ambiguity to resolve. A reimbursed transaction with no merchant recorded
+    contributes no row, matching :func:`app.domain.spend.merchant_spend_by_booking_date`,
+    which drops the same rows for the same reason: "who was this with?" has no
+    answer to net against.
+    """
+    daily: dict[tuple[str, date], Decimal] = defaultdict(lambda: ZERO)
+    walk = _offsets(session, category_id, start, end)
+    while True:
+        try:
+            original, _posting, applied, when = next(walk)
+        except StopIteration as stop:
+            rows = sorted((m, d, v) for (m, d), v in daily.items())
+            return rows, stop.value
+        if original.merchant is None:
+            continue
+        daily[(original.merchant, when)] += applied
 
 
 def _in_scope(session: Session, posting: Posting, ids: set[uuid.UUID] | None) -> bool:

@@ -430,3 +430,115 @@ def test_the_merchant_index_migration_left_the_constraint_counts_alone(session):
     )
     assert {"ck_posting_currency_gbp", "ck_budget_anchor_iff_fortnightly"} <= checks
     assert {"postings_balance_check", "transactions_single_correction_check"} <= triggers
+
+
+# --------------------------------------------------------------------------
+# Cross-engine agreement with reimbursement netting (X21)
+# --------------------------------------------------------------------------
+
+
+def test_a_fully_reimbursed_trip_does_not_trip_the_merchant_warning(
+    client, session, accounts, categories
+):
+    """The exact failure a review caught: the merchant baseline read raw expense
+    totals while the budget's own Spent read the netted ones, so a work trip
+    repaid in full could fire an anomaly over money the ledger treats as zero.
+
+    Ordinary history at Trainline, then a GBP 600 trip in the current period that
+    is fully repaid by an employer inside the same period. The budget must show
+    zero spend (M3, already covered elsewhere) *and* the merchant warning must
+    not fire over the same money.
+    """
+    today = clock_today(session)
+    for n in range(6, 0, -1):
+        post(
+            session,
+            months_back(today, n),
+            "Train",
+            [
+                (accounts["current"], Decimal("-45.00"), None),
+                (accounts["groceries"], Decimal("45.00"), categories["groceries"]),
+            ],
+            merchant="Trainline",
+        )
+    trip = post(
+        session,
+        today,
+        "Work trip",
+        [
+            (accounts["current"], Decimal("-600.00"), None),
+            (accounts["groceries"], Decimal("600.00"), categories["groceries"]),
+        ],
+        merchant="Trainline",
+    )
+    post(
+        session,
+        today,
+        "Employer repayment",
+        [
+            (accounts["current"], Decimal("600.00"), None),
+            (accounts["salary"], Decimal("-600.00"), None),
+        ],
+        reimburses_id=trip.id,
+    )
+
+    budget_id = make_budget(client, categories, months_back(today, 7))
+    period = current(client, budget_id, today.replace(day=1))
+
+    assert period["spent_minor"] == 0, "the repayment must net out in the budget too"
+    # Net spend at Trainline this period is exactly zero, so it is excluded from
+    # judgment the same way a net refund is (MerchantHistory.review's own
+    # "nothing bought, or a net refund" branch) -- not merely suppressed after
+    # being judged and found ordinary.
+    warning = warning_for(period, MERCHANT_ANOMALY)
+    assert warning["status"] == NOT_EVALUATED
+    assert warning["reason"] == NO_MERCHANT_SPEND
+    assert period["merchant_anomalies"] == []
+
+
+def test_a_partially_reimbursed_spike_still_fires_on_the_unrepaid_remainder(
+    client, session, accounts, categories
+):
+    """Netting must reduce the figure the warning judges, not blind it entirely.
+    GBP 600 spent, GBP 100 repaid, GBP 500 net -- still well above an ordinary
+    ~GBP 45 month at this merchant, so the warning has real money to judge."""
+    today = clock_today(session)
+    for n in range(6, 0, -1):
+        post(
+            session,
+            months_back(today, n),
+            "Train",
+            [
+                (accounts["current"], Decimal("-45.00"), None),
+                (accounts["groceries"], Decimal("45.00"), categories["groceries"]),
+            ],
+            merchant="Trainline",
+        )
+    trip = post(
+        session,
+        today,
+        "Work trip",
+        [
+            (accounts["current"], Decimal("-600.00"), None),
+            (accounts["groceries"], Decimal("600.00"), categories["groceries"]),
+        ],
+        merchant="Trainline",
+    )
+    post(
+        session,
+        today,
+        "Partial employer repayment",
+        [
+            (accounts["current"], Decimal("100.00"), None),
+            (accounts["salary"], Decimal("-100.00"), None),
+        ],
+        reimburses_id=trip.id,
+    )
+
+    budget_id = make_budget(client, categories, months_back(today, 7))
+    period = current(client, budget_id, today.replace(day=1))
+
+    assert period["spent_minor"] == 50_000
+    assert warning_for(period, MERCHANT_ANOMALY)["status"] == FIRED
+    assert period["merchant_anomalies"][0]["merchant"] == "Trainline"
+    assert period["merchant_anomalies"][0]["spent_minor"] == 50_000

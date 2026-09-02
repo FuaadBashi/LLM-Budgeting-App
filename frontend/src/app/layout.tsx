@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { DesignProvider } from "@/lib/design";
+import { designFontVariables } from "@/lib/fonts";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -19,8 +21,8 @@ const geistMono = Geist_Mono({
  */
 export const viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fcfcfb" },
-    { media: "(prefers-color-scheme: dark)", color: "#1a1a19" },
+    { media: "(prefers-color-scheme: light)", color: "#f2ede1" },
+    { media: "(prefers-color-scheme: dark)", color: "#0d0c0a" },
   ],
   viewportFit: "cover" as const,
 };
@@ -30,13 +32,21 @@ export const metadata: Metadata = {
   description: "Ledger-first personal finance tracking, planning and simulation",
 };
 
+//: The design/appearance a returning visitor last chose is applied by
+//: `DesignProvider` itself, via `useLayoutEffect` -- see `lib/design.tsx` for
+//: why that lives there and not in a blocking boot script here. `<html>`
+//: therefore carries no data-design/data-theme of its own; the bare :root
+//: fallback in globals.css (== Vault Noir, dark) is what paints before that
+//: effect runs.
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${designFontVariables} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <DesignProvider>{children}</DesignProvider>
+      </body>
     </html>
   );
 }

@@ -12,7 +12,11 @@ from decimal import Decimal
 import pytest
 
 from app.domain.budgets import chain, current_period
-from app.domain.reimbursement import allocate, netting_by_booking_date
+from app.domain.reimbursement import (
+    allocate,
+    merchant_netting_by_booking_date,
+    netting_by_booking_date,
+)
 from app.models import Budget, BudgetPeriod, BudgetRevision, RolloverPolicy
 from tests.conftest import make_account, post
 from app.models import AccountKind
@@ -298,3 +302,109 @@ def test_scope_follows_the_original_expense_leg(session, accounts, categories):
     )
 
     assert current_period(session, food_budget, date(2026, 8, 25)).spent == Decimal("0")
+
+
+# --------------------------------------------------------------------------
+# Netting for the merchant baseline (warning e)
+#
+# The merchant baseline and the budget's own Spent must read the same money.
+# They are two engines over the same reimbursement, and drift between them is
+# exactly what X21 exists to catch: a fully reimbursed trip must not read as
+# £0 spend to the budget while still tripping the anomaly warning as £600 at
+# the merchant it went through.
+# --------------------------------------------------------------------------
+
+
+def test_merchant_netting_offsets_the_same_amount_as_the_date_only_view(
+    session, accounts
+):
+    claims = claims_account(session)
+    trip = post(
+        session,
+        date(2026, 8, 10),
+        "Work trip",
+        [(accounts["current"], "-600"), (accounts["groceries"], "600")],
+        merchant="Trainline",
+    )
+    post(
+        session,
+        date(2026, 8, 20),
+        "Employer repayment",
+        [(accounts["current"], "600"), (claims, "-600")],
+        reimburses_id=trip.id,
+    )
+
+    daily, excess = netting_by_booking_date(session, None, START, END)
+    by_merchant, merchant_excess = merchant_netting_by_booking_date(
+        session, None, START, END
+    )
+
+    assert daily == [(date(2026, 8, 20), Decimal("600"))]
+    assert by_merchant == [("Trainline", date(2026, 8, 20), Decimal("600"))]
+    assert merchant_excess == excess == Decimal("0")
+
+
+def test_a_reimbursement_with_no_merchant_on_the_original_nets_nothing(
+    session, accounts
+):
+    """Matches merchant_spend_by_booking_date, which drops the same rows for the
+    same reason: there is no "who was this with" to net against."""
+    claims = claims_account(session)
+    trip = post(
+        session,
+        date(2026, 8, 10),
+        "Work trip",
+        [(accounts["current"], "-600"), (accounts["groceries"], "600")],
+    )
+    post(
+        session,
+        date(2026, 8, 20),
+        "Employer repayment",
+        [(accounts["current"], "600"), (claims, "-600")],
+        reimburses_id=trip.id,
+    )
+
+    by_merchant, _excess = merchant_netting_by_booking_date(session, None, START, END)
+    assert by_merchant == []
+
+
+def test_a_split_reimbursement_nets_each_merchant_it_actually_touched(
+    session, accounts, categories
+):
+    """One repayment can cover two transactions at two merchants; the offset must
+    land against the one each leg actually belongs to, not be pooled or dropped."""
+    claims = claims_account(session)
+    train = post(
+        session,
+        date(2026, 8, 10),
+        "Train",
+        [(accounts["current"], "-100"), (accounts["groceries"], "100")],
+        merchant="Trainline",
+    )
+    hotel = post(
+        session,
+        date(2026, 8, 11),
+        "Hotel",
+        [(accounts["current"], "-500"), (accounts["groceries"], "500")],
+        merchant="Premier Inn",
+    )
+    post(
+        session,
+        date(2026, 8, 20),
+        "Train repaid",
+        [(accounts["current"], "100"), (claims, "-100")],
+        reimburses_id=train.id,
+    )
+    post(
+        session,
+        date(2026, 8, 21),
+        "Hotel repaid",
+        [(accounts["current"], "500"), (claims, "-500")],
+        reimburses_id=hotel.id,
+    )
+
+    by_merchant, _excess = merchant_netting_by_booking_date(session, None, START, END)
+    assert sorted(by_merchant) == [
+        ("Premier Inn", date(2026, 8, 21), Decimal("500")),
+        ("Trainline", date(2026, 8, 20), Decimal("100")),
+    ]

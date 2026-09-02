@@ -88,14 +88,14 @@ export function BudgetCard({ budget }: { budget: BudgetPeriod }) {
 
   return (
     <article
-      className="rounded-xl p-5"
+      className="rounded-[var(--radius)] p-5"
       style={{
         background: "var(--surface-1)",
-        boxShadow: "inset 0 0 0 1px var(--hairline)",
+        boxShadow: "inset 0 0 0 var(--border-w, 1px) var(--hairline)",
       }}
     >
       <header className="mb-4 flex items-baseline justify-between gap-3">
-        <h3 className="font-medium" style={{ color: "var(--text-primary)" }}>
+        <h3 className="font-display" style={{ color: "var(--text-primary)" }}>
           {budget.budget_name}
         </h3>
         <span className="text-xs" style={{ color: "var(--text-muted)" }}>
@@ -113,7 +113,7 @@ export function BudgetCard({ budget }: { budget: BudgetPeriod }) {
           {closed ? "Final position" : "Left to spend per day"}
         </div>
         <div
-          className="text-2xl font-semibold"
+          className="font-display text-2xl"
           style={{ color: "var(--text-primary)" }}
         >
           {budget.presented_allowance_minor !== null

@@ -41,7 +41,7 @@ export function StatTile({
     <div className={`card p-5 ${lead ? "sm:p-6" : ""}`}>
       <div className="section-label">{label}</div>
       <div
-        className={`mt-2 font-semibold ${
+        className={`font-display mt-2 ${
           lead ? "text-4xl sm:text-5xl" : "text-2xl"
         }`}
         style={{ color: TONE_INK[tone] }}

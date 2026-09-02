@@ -20,10 +20,16 @@ Three documents govern the code:
 spreadsheet and then some: record transactions, manage balances, track budgets with rollover and
 warnings, save toward goals, see upcoming cash flow against a protected buffer, import statements
 and receipts through a candidate inbox, run what-if scenarios, and read an explanation of how
-every figure was reached. 667 tests.
+every figure was reached. 674 tests.
 
-Left to do: the deploy itself. `docs/RUNNING.md` describes the setup worth having — Tailscale,
-real certificates, nothing exposed to the internet.
+A frontend visual design system also ships four switchable directions (Vault Noir, Field
+Ledger, Raw Ledger, Command Ledger), each with its own light and dark palette, picked from the
+gear icon on every screen. See `docs/HANDOFF.md`'s Frontend section for where it lives and
+`docs/DECISIONS.md` for why it's built the way it is.
+
+Left to do: the deploy itself, and a follow-up pass on the design system (motion, more variance
+between screens, better use of empty space). `docs/RUNNING.md` describes the deploy setup worth
+having — Tailscale, real certificates, nothing exposed to the internet.
 
 ## Design in one paragraph
 

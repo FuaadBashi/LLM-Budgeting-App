@@ -26,9 +26,18 @@ trap cleanup INT TERM EXIT
 # --- Postgres -------------------------------------------------------------
 if ! pg_isready -q 2>/dev/null; then
   say "Starting Postgres…"
-  brew services start postgresql@17 >/dev/null 2>&1 \
-    || brew services start postgresql >/dev/null 2>&1
+  # Unset, brew checks for updates on every invocation -- a slow or blocked
+  # connection turns that into a silent, indefinite hang right here, which
+  # reads as "stuck at starting" with no error and no clue why.
+  export HOMEBREW_NO_AUTO_UPDATE=1
+  ( brew services start postgresql@17 >/dev/null 2>&1 \
+      || brew services start postgresql >/dev/null 2>&1 ) &
+  BREW_PID=$!
+  # Backgrounded and bounded, not awaited: if brew itself hangs on something
+  # other than the update check, this loop still exits on schedule instead of
+  # blocking forever on a command this script does not control.
   for _ in $(seq 1 30); do pg_isready -q 2>/dev/null && break; sleep 1; done
+  kill "$BREW_PID" 2>/dev/null
 fi
 if ! pg_isready -q 2>/dev/null; then
   fail "Postgres will not start. Open Terminal and run: brew services start postgresql@17"

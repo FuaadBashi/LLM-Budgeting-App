@@ -48,7 +48,7 @@ export default async function CalendarPage() {
       <main className="mx-auto max-w-5xl space-y-8 px-4 py-6 sm:px-6 lg:py-10">
         <header>
           <h1
-            className="text-xl font-semibold sm:text-2xl"
+            className="font-display text-xl sm:text-2xl"
             style={{ color: "var(--text-primary)" }}
           >
             Calendar

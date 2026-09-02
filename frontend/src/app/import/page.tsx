@@ -40,7 +40,7 @@ export default async function ImportPage() {
       <main className="mx-auto max-w-4xl space-y-6 px-4 py-6 sm:px-6 lg:py-10">
         <header>
           <h1
-            className="text-xl font-semibold sm:text-2xl"
+            className="font-display text-xl sm:text-2xl"
             style={{ color: "var(--text-primary)" }}
           >
             Import
