@@ -93,7 +93,7 @@ export function PreferencesPanel() {
         onClick={() => setOpen((v) => !v)}
         aria-label="Open appearance preferences"
         aria-expanded={open}
-        className="flex h-11 w-11 items-center justify-center rounded-full"
+        className="btn-shine flex h-11 w-11 items-center justify-center rounded-full"
         style={{
           background: "var(--surface-1)",
           color: "var(--text-secondary)",

@@ -184,8 +184,8 @@ export function TransactionEntry({
         onClick={() => void openForm()}
         className={
           iconOnly
-            ? `flex items-center justify-center rounded-full p-3 transition-opacity hover:opacity-90 ${className}`
-            : `flex items-center gap-2 rounded-full px-4 py-3 text-sm font-medium transition-opacity hover:opacity-90 ${className}`
+            ? `btn-shine pulse-invite flex items-center justify-center rounded-full p-3 transition-opacity hover:opacity-90 ${className}`
+            : `btn-shine flex items-center gap-2 rounded-full px-4 py-3 text-sm font-medium transition-opacity hover:opacity-90 ${className}`
         }
         style={{ background: "var(--accent)", color: "#ffffff" }}
         aria-haspopup="dialog"
@@ -337,7 +337,7 @@ export function TransactionEntry({
                   <button type="button" onClick={() => setOpen(false)} disabled={saving} className="rounded-full px-4 py-2.5 text-sm font-medium disabled:opacity-50" style={{ color: "var(--text-secondary)" }}>
                     Cancel
                   </button>
-                  <button type="submit" disabled={saving || choices.source.length === 0 || choices.destination.length === 0} className="rounded-full px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--accent)" }}>
+                  <button type="submit" disabled={saving || choices.source.length === 0 || choices.destination.length === 0} className="btn-shine rounded-full px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--accent)" }}>
                     {saving ? "Recording…" : "Record transaction"}
                   </button>
                 </div>

@@ -507,7 +507,7 @@ function CandidateRow({
                     category_id: category || null,
                   })
                 }
-                className="rounded-full px-3 py-1.5 text-xs font-medium"
+                className="btn-shine rounded-full px-3 py-1.5 text-xs font-medium"
                 style={{ background: "var(--accent)", color: "#fff", opacity: busy ? 0.6 : 1 }}
               >
                 {busy ? "Posting…" : "Accept"}

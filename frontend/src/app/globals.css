@@ -629,6 +629,89 @@
   filter: drop-shadow(0 18px 28px rgba(0, 0, 0, 0.5));
 }
 
+/* ======================================================================
+   Buttons and controls, elaborated. The nav has its own hover glow
+   (above); this is everything else clickable, which had almost no
+   feedback at all -- form focus was an instant border-colour snap, and
+   every ghost/secondary button (Cancel, Decline, Reopen) had none
+   whatsoever, not even a colour change.
+   ====================================================================== */
+
+/* Press feedback on every button -- the "it registered" response nothing
+   in the app had before, not even the primary CTAs. */
+[data-design="noir"] button {
+  transition: transform var(--dur-fast) var(--ease-noir), filter var(--dur-fast) var(--ease-noir);
+}
+[data-design="noir"] button:not(:disabled):active {
+  transform: scale(0.96);
+}
+[data-design="noir"] button:not(:disabled):hover {
+  filter: brightness(1.14);
+}
+
+/* Toggle-style controls -- the design/appearance pickers, the
+   transaction-kind tabs -- all mark their selected state with
+   aria-pressed already, so one selector reaches every one of them
+   without editing a single component. */
+[data-design="noir"] [aria-pressed] {
+  transition: box-shadow var(--dur-fast) var(--ease-noir), background-color var(--dur-fast) var(--ease-noir), color var(--dur-fast) var(--ease-noir);
+}
+
+/* Same trick for the mobile bottom tab bar: RailLink/MastheadLink get a
+   transition via .navlink, but BottomLink (shared across all four
+   designs) doesn't carry that class, so its active-state colour swap had
+   no transition of its own until now. */
+[data-design="noir"] [aria-current="page"] {
+  transition: color var(--dur-med) var(--ease-noir);
+}
+
+/* Form focus: a softer glow that eases in instead of snapping. */
+[data-design="noir"] .form-control {
+  transition: border-color var(--dur-fast) var(--ease-noir), box-shadow var(--dur-med) var(--ease-noir);
+}
+[data-design="noir"] .form-control:focus {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 24px -10px var(--accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* A light sweep across a button on hover -- opt-in via .btn-shine,
+     reserved for the app's money-moving actions (Add, Record, Accept)
+     rather than every button, so it reads as weight, not noise. */
+  [data-design="noir"] .btn-shine {
+    position: relative;
+    overflow: hidden;
+  }
+  [data-design="noir"] .btn-shine::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, 0.32) 50%, transparent 60%);
+    transform: translateX(-120%);
+    transition: transform var(--dur-slow) var(--ease-noir);
+    pointer-events: none;
+  }
+  [data-design="noir"] .btn-shine:hover::after {
+    transform: translateX(120%);
+  }
+
+  /* A slow breathing glow -- opt-in, reserved for the icon-only Add
+     button (mobile FAB, rail, dock). A bare icon with no text label is
+     the one control in the app that most benefits from staying
+     findable without shouting -- see AppShell's file header on why the
+     Add action is deliberately prominent everywhere. */
+  @keyframes noir-invite {
+    0%, 100% {
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 20px 3px color-mix(in oklab, var(--accent) 35%, transparent);
+    }
+  }
+  [data-design="noir"] .pulse-invite {
+    animation: noir-invite 3.4s ease-in-out infinite;
+  }
+}
+
 /* Rail dead-space ambient: a slow brass wash bleeding from the top of the
    page, and a barely-there ledger grid -- the wide empty column either side
    of the content on desktop was flat and did nothing, this gives it
