@@ -23,8 +23,14 @@ export function ReconcileForm({ accounts }: { accounts: Account[] }) {
   const [result, setResult] = useState<Reconciliation | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accountId, setAccountId] = useState("");
 
   const reconcilable = accounts.filter((a) => RECONCILABLE.has(a.kind));
+  // A credit card statement says "£500.00 owed", never "-£500.00". The ledger
+  // stores that as -50000 because liabilities are credit-normal, so the field
+  // asks for what the statement actually prints and the sign is flipped once,
+  // at a named line below -- the rule CLAUDE.md sets for exactly this case.
+  const owed = reconcilable.find((a) => a.id === accountId)?.kind === "liability";
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -32,11 +38,12 @@ export function ReconcileForm({ accounts }: { accounts: Account[] }) {
     setResult(null);
 
     const data = new FormData(event.currentTarget);
-    const statedBalance = parseMajorToMinor(String(data.get("stated_balance") ?? ""));
-    if (statedBalance === null) {
+    const entered = parseMajorToMinor(String(data.get("stated_balance") ?? ""));
+    if (entered === null) {
       setError("Enter a valid amount.");
       return;
     }
+    const statedBalance = owed ? -entered : entered;
 
     setBusy(true);
     try {
@@ -66,7 +73,13 @@ export function ReconcileForm({ accounts }: { accounts: Account[] }) {
 
         <div className="grid gap-4 sm:grid-cols-3">
           <Field label="Account">
-            <select name="account_id" required defaultValue="" className="form-control">
+            <select
+              name="account_id"
+              required
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              className="form-control"
+            >
               <option value="" disabled>
                 Choose an account
               </option>
@@ -80,7 +93,7 @@ export function ReconcileForm({ accounts }: { accounts: Account[] }) {
           <Field label="As of">
             <input type="date" name="as_of" required className="form-control" />
           </Field>
-          <Field label="Statement balance">
+          <Field label={owed ? "Amount owed" : "Statement balance"}>
             <div className="relative">
               <span
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-sm"

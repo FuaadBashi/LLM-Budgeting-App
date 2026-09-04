@@ -142,11 +142,16 @@ def list_insights(
     return [_insight_out(i) for i in insights.collect(session, on)]
 
 
-@router.get("/insights/narrations", response_model=dict[int, str])
+@router.get("/insights/narrations", response_model=dict[str, str])
 def insight_narrations(
     on: date | None = None, session: Session = Depends(get_session)
-) -> dict[int, str]:
-    """Plain-English rewrites, keyed by index into the same /insights list.
+) -> dict[str, str]:
+    """Plain-English rewrites, keyed by `narrate.insight_key`.
+
+    Keyed on the insight's identity rather than its position in the list:
+    this endpoint recomputes `insights.collect()` independently of the
+    `/insights` call the client already made, and the two can legitimately
+    disagree by an entry, which would slide every later index by one.
 
     A separate call so a slow or unreliable local model can never block the
     page that already rendered correctly without it -- the client fetches

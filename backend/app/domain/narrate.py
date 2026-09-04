@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Protocol
 
 from app.config import settings
@@ -33,18 +34,40 @@ from app.domain.insights import Insight
 
 log = logging.getLogger("uvicorn.error")
 
-PROMPT = """Rewrite each of these financial observations as ONE short, plain
-English sentence a person would actually want to read -- friendlier than the
-original, but built ONLY from the numbers already given. Invent nothing: no
-new amount, no advice beyond what is already implied, no claim the original
-does not make.
+#: The word "number" used to appear here, asking the model to key its reply on
+#: "each item's number". Against llama3.2 that reliably bound to the currency
+#: figures *inside* the text rather than the item's position: a goal insight
+#: whose evidence trailer carries five £ amounts came back keyed
+#: {"£2,000.00": ..., "10": ..., "£150.00": ...} on every single call, so
+#: `_parse` dropped all of it and the feature was silently dead in production.
+#: An ordered array removes the need to name a key at all.
+PROMPT = """Rewrite each observation below as ONE short, friendly sentence a
+person would actually want to read.
 
-Reply with JSON only: an object mapping each item's number (as a string) to
-its rewritten sentence. Omit a number entirely rather than guessing if an
-item does not make sense.
+STRICT RULES:
+- Use ONLY figures that already appear in the observation. Never introduce a
+  number that is not there, and never turn a count into an amount of money.
+- Never change or convert a currency symbol.
+- Do not add advice or any claim the observation does not make.
 
-Items:
+There are {count} observation(s), so "sentences" must contain exactly {count}
+string(s), in the same order they are listed. Do not split one observation
+into several sentences.
+
+Reply with JSON only, in this shape:
+{{"sentences": [<one string per observation>]}}
+
+Observations:
 {items}"""
+
+#: A figure the narration mentions that the source brief never contained is,
+#: by definition, invented. This is the deterministic backstop that makes the
+#: whole feature safe to show: the model demonstrably fabricates (an observed
+#: reply turned "needs 14 more" -- months -- into "needs $14.00 more"), and
+#: this app's entire premise is that a figure on screen is derived and
+#: checkable. Cheap, needs no second model call, and cannot itself be wrong
+#: in the dangerous direction: it only ever rejects.
+_FIGURE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 
 class Narrator(Protocol):
@@ -108,11 +131,33 @@ class ClaudeNarrator:
 
 
 def _prompt(briefs: list[str]) -> str:
-    items = "\n".join(f"{i}. {b}" for i, b in enumerate(briefs))
-    return PROMPT.format(items=items)
+    # The count is stated explicitly because a worked example carrying two
+    # array slots was enough for llama3.2 to return two sentences for a
+    # single observation, every time -- it copies the shape of the example
+    # rather than counting the input.
+    items = "\n".join(f"{i}. {b}" for i, b in enumerate(briefs, start=1))
+    return PROMPT.format(items=items, count=len(briefs))
+
+
+def figures(text: str) -> set[str]:
+    """Every numeric token in `text`, normalised so 2,000.00 == 2000.00."""
+    return {m.replace(",", "").rstrip(".") for m in _FIGURE.findall(text)}
+
+
+def invents_figures(narration: str, brief: str) -> bool:
+    """True if the narration mentions a number the brief never did."""
+    return bool(figures(narration) - figures(brief))
 
 
 def _parse(text: str, count: int) -> dict[int, str]:
+    """Read the reply into {index: sentence}. Anything doubtful is dropped.
+
+    A length mismatch discards the whole reply rather than guessing at the
+    alignment: the model has been observed splitting one observation into two
+    sentences, and a misaligned narration would attach the wrong sentence to
+    the wrong insight -- worse than showing none, because it would read as
+    correct.
+    """
     body = text.strip()
     if body.startswith("```"):
         body = body.split("```")[1] if "```" in body[3:] else body[3:]
@@ -125,15 +170,23 @@ def _parse(text: str, count: int) -> dict[int, str]:
     if not isinstance(parsed, dict):
         return {}
 
-    out: dict[int, str] = {}
-    for key, value in parsed.items():
-        try:
-            index = int(key)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= index < count and value:
-            out[index] = str(value).strip()
-    return out
+    sentences = parsed.get("sentences")
+    if not isinstance(sentences, list):
+        log.warning("narration reply had no `sentences` array")
+        return {}
+    if len(sentences) != count:
+        log.warning(
+            "narration reply had %d sentences for %d observations; discarding",
+            len(sentences),
+            count,
+        )
+        return {}
+
+    return {
+        i: str(s).strip()
+        for i, s in enumerate(sentences)
+        if s and str(s).strip()
+    }
 
 
 def build_narrator() -> Narrator:
@@ -158,16 +211,59 @@ def _brief(insight: Insight) -> str:
     return f"{insight.title}. {insight.detail}" + (f" Evidence -- {evidence}." if evidence else "")
 
 
+def insight_key(insight: Insight) -> str:
+    """A stable identity for one insight, independent of list position.
+
+    `/insights` and `/insights/narrations` each call `insights.collect()`
+    separately, so the two lists are computed from the ledger at slightly
+    different instants. Keying narrations on array index assumed those lists
+    always agree -- but an insight can appear or vanish between the two calls
+    (the backup-staleness one flips the moment the 06:00 backup timer runs),
+    and every index after it then shifts, silently attaching one insight's
+    narration to a different insight. Identity cannot slip that way.
+
+    The frontend mirrors this in InsightPanel.tsx; keep the two in step.
+    """
+    return "|".join(
+        [
+            insight.kind,
+            insight.subject_merchant or "",
+            str(insight.subject_category_id or ""),
+            insight.title,
+        ]
+    )
+
+
 def narrate_all(
     insights: list[Insight], *, narrator: Narrator | None = None
-) -> dict[int, str]:
-    """A plain-English sentence per insight, keyed by its index in `insights`.
+) -> dict[str, str]:
+    """A plain-English sentence per insight, keyed by `insight_key`.
 
-    An index missing from the result means no narration was produced --
-    the caller falls back to the insight's own `detail`, which is always a
+    A key missing from the result means no narration was produced -- the
+    caller falls back to the insight's own `detail`, which is always a
     correct, complete sentence on its own.
+
+    Every candidate sentence passes the invented-figure guard before it is
+    returned. That check is not belt-and-braces: the model has been observed
+    turning a count of months into a sum of money, and this app's whole
+    premise is that a figure on screen came from the ledger.
     """
     if not insights:
         return {}
     narrator = narrator if narrator is not None else build_narrator()
-    return narrator.narrate([_brief(i) for i in insights])
+
+    briefs = [_brief(i) for i in insights]
+    by_index = narrator.narrate(briefs)
+
+    out: dict[str, str] = {}
+    for index, sentence in by_index.items():
+        if not (0 <= index < len(insights)):
+            continue
+        if invents_figures(sentence, briefs[index]):
+            log.warning(
+                "narration invented a figure not in the evidence; dropped: %r",
+                sentence,
+            )
+            continue
+        out[insight_key(insights[index])] = sentence
+    return out

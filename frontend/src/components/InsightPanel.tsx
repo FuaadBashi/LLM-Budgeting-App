@@ -27,6 +27,18 @@ const SEVERITY: Record<Severity, { mark: string; word: string; colour: string }>
  * an explanation that merely looked plausible would be worse than none, since
  * it would be believed.
  */
+/**
+ * Mirrors `narrate.insight_key` on the backend -- keep the two in step.
+ *
+ * Narrations cannot be joined to insights by array position: the two come
+ * from separate `/insights` and `/insights/narrations` calls, each of which
+ * recomputes the insight set from the ledger, and an insight appearing or
+ * vanishing between them shifts every later index. Identity does not slip.
+ */
+function insightKey(i: Insight): string {
+  return [i.kind, i.subject_merchant ?? "", i.subject_category_id ?? "", i.title].join("|");
+}
+
 export function InsightPanel({
   insights,
   derivations,
@@ -80,7 +92,7 @@ export function InsightPanel({
               <InsightCard
                 key={`${insight.kind}-${index}`}
                 insight={insight}
-                narration={narrations[index]}
+                narration={narrations[insightKey(insight)]}
               />
             ))}
           </ul>

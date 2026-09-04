@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.schemas import to_minor
 from app.db import get_session
@@ -134,7 +135,17 @@ async def upload_statement(
         text = payload.decode("latin-1")
 
     try:
-        batch = importing.stage(
+        # Off the event loop. `stage` is synchronous and, with a provider
+        # configured, spends most of its time inside blocking httpx calls --
+        # a duplicate second-opinion, a categorisation pass, its verify pass
+        # and a canonical-name pass, each with its own timeout. Measured at
+        # ~55s for a statement with 20 new merchants against a local model.
+        # Awaiting that directly in an `async def` blocks the ONE event loop
+        # thread, so every other request in flight -- the dashboard, the
+        # session check, a second tab -- stops dead for the duration, not
+        # just this upload.
+        batch = await run_in_threadpool(
+            importing.stage,
             session,
             filename=file.filename or "statement.csv",
             content=text,
@@ -239,7 +250,13 @@ async def upload_receipt(
 
     payload = await file.read()
     try:
-        candidate = receipts.stage(
+        # Off the event loop -- see upload_statement. This path is the worse
+        # of the two: a vision read, then a second vision pass to verify it,
+        # then categorisation and canonical names, each blocking with its own
+        # timeout. On a cold vision model that is minutes during which no
+        # other request could be served at all.
+        candidate = await run_in_threadpool(
+            receipts.stage,
             session,
             filename=file.filename or "receipt.jpg",
             image=payload,

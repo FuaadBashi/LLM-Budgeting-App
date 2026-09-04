@@ -45,7 +45,14 @@ function BucketRow({ bucket }: { bucket: AllocationBucket }) {
   const color = BUCKET_COLOR[bucket.key] ?? "var(--accent)";
   const fillPct = Math.max(0, Math.min(1, bucket.share ?? 0)) * 100;
   const targetPct = bucket.target_share !== null ? bucket.target_share * 100 : null;
-  const over = (bucket.variance_amount_minor ?? 0) > 0;
+  const variance = bucket.variance_amount_minor ?? 0;
+  const over = variance > 0;
+  // Which direction is bad depends on the bucket, and the raw sign does not
+  // know that: spending more than the target on needs or wants is the thing
+  // to flag, but saving MORE than the 20% target is the whole point of the
+  // rule. Keying the warning off `variance > 0` alone marked a 32%-savings
+  // month with an amber ▲, telling someone their best month was a problem.
+  const adverse = bucket.key === "savings" ? variance < 0 : variance > 0;
 
   return (
     <div>
@@ -90,9 +97,9 @@ function BucketRow({ bucket }: { bucket: AllocationBucket }) {
       {bucket.variance_amount_minor !== null && bucket.variance_share !== null && (
         <p
           className="mt-1 text-xs"
-          style={{ color: over ? "var(--status-warning)" : "var(--text-muted)" }}
+          style={{ color: adverse ? "var(--status-warning)" : "var(--text-muted)" }}
         >
-          {over && <span aria-hidden>▲ </span>}
+          {adverse && <span aria-hidden>▲ </span>}
           {formatSignedMinor(bucket.variance_amount_minor)} vs target (
           {Math.round(Math.abs(bucket.variance_share) * 100)} pts {over ? "over" : "under"})
         </p>
