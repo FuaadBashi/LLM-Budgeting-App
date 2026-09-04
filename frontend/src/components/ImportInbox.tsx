@@ -356,13 +356,18 @@ function CandidateRow({
   const [category, setCategory] = useState(row.suggested_category_id ?? "");
   const isDuplicate = row.status === "duplicate";
 
-  // verification_* are surfaced as their own banner below, not in the
-  // generic dump -- a warning nobody sees because it's behind "Source row"
-  // is barely better than not having it.
+  // verification_* and canonical_name are surfaced in their own places, not
+  // in the generic dump -- a warning nobody sees because it's behind "Source
+  // row" is barely better than not having it.
   const raw = useMemo(
     () =>
       Object.entries(row.raw).filter(
-        ([k, v]) => v !== "" && k !== "verification_matches" && k !== "verification_note",
+        ([k, v]) =>
+          v !== "" &&
+          k !== "verification_matches" &&
+          k !== "verification_note" &&
+          k !== "canonical_name" &&
+          k !== "split_of_total",
       ),
     [row.raw],
   );
@@ -386,8 +391,20 @@ function CandidateRow({
           {row.booking_date}
         </span>
         <span className="min-w-0 flex-1" style={{ color: "var(--text-primary)" }}>
-          {row.description}
-          {row.merchant && row.merchant !== row.description && (
+          {/* A tidied name reads better than the raw bank text, when one was
+              resolved -- the raw description stays right below it, since
+              that (never this) is what matching and search actually use. */}
+          {row.raw.canonical_name && row.raw.canonical_name !== row.description ? (
+            <>
+              {row.raw.canonical_name}
+              <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>
+                {row.description}
+              </span>
+            </>
+          ) : (
+            row.description
+          )}
+          {row.merchant && row.merchant !== row.description && row.merchant !== row.raw.canonical_name && (
             <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>
               {row.merchant}
             </span>
@@ -410,6 +427,15 @@ function CandidateRow({
             ? "Looks like a payment already in the ledger."
             : "Looks like an earlier row in the same file."}{" "}
           Reopen it if this really happened twice.
+        </p>
+      )}
+
+      {/* A receipt the reader itemised, split into one candidate per line --
+          each one still needs its own accept, so it's worth saying what
+          receipt it came from. */}
+      {row.raw.split_of_total && (
+        <p className="mt-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
+          One of several items from a £{row.raw.split_of_total} receipt.
         </p>
       )}
 

@@ -63,13 +63,24 @@ class ReaderWithNoVerify:
         return self._read
 
 
-def a_receipt(total="42.30", merchant="DISHOOM", when=date(2026, 8, 18), confident=True):
+def a_receipt(
+    total="42.30",
+    merchant="DISHOOM",
+    when=date(2026, 8, 18),
+    confident=True,
+    line_items=(),
+):
     return receipts.ReceiptRead(
         merchant=merchant,
         when=when,
         total=Decimal(total) if total is not None else None,
         confident=confident,
+        line_items=line_items,
     )
+
+
+def item(description, amount):
+    return receipts.LineItem(description=description, amount=Decimal(amount))
 
 
 @pytest.fixture
@@ -350,6 +361,155 @@ def test_a_failing_verification_call_does_not_fail_the_upload(session, accounts)
     candidate = stage(session, accounts, ExplodingVerifyReader(a_receipt()))
     assert candidate.id is not None
     assert candidate.raw["verification_matches"] is None
+
+
+# --------------------------------------------------------------------------
+# Line-item splitting -- only ever when the lines sum to the total
+# --------------------------------------------------------------------------
+
+
+def test_line_items_that_sum_to_the_total_become_separate_candidates(session, accounts):
+    read = a_receipt(
+        total="12.00",
+        line_items=(item("Milk", "2.00"), item("Bread", "10.00")),
+    )
+    stage(session, accounts, FakeReader(read))
+
+    rows = session.scalars(select(ImportCandidate)).all()
+    assert sorted(r.description for r in rows) == ["Bread", "Milk"]
+    assert sorted(r.amount for r in rows) == [Decimal("-10.00"), Decimal("-2.00")]
+
+
+def test_the_batch_row_count_matches_the_split(session, accounts):
+    read = a_receipt(
+        total="12.00",
+        line_items=(item("Milk", "2.00"), item("Bread", "10.00")),
+    )
+    candidate = stage(session, accounts, FakeReader(read))
+    batch = session.get(ImportBatch, candidate.batch_id)
+    assert batch.row_count == 2
+
+
+def test_a_split_candidate_notes_the_receipt_total_it_came_from(session, accounts):
+    read = a_receipt(
+        total="12.00",
+        line_items=(item("Milk", "2.00"), item("Bread", "10.00")),
+    )
+    stage(session, accounts, FakeReader(read))
+    rows = session.scalars(select(ImportCandidate)).all()
+    assert all(r.raw["split_of_total"] == "12.00" for r in rows)
+
+
+def test_line_items_that_do_not_sum_to_the_total_stay_one_candidate(session, accounts):
+    """The reader offered a split, but the arithmetic doesn't check out --
+    one candidate for the whole receipt is the safe fallback, not three
+    guessed line amounts."""
+    read = a_receipt(
+        total="12.00",
+        line_items=(item("Milk", "2.00"), item("Bread", "9.00")),  # sums to 11.00
+    )
+    stage(session, accounts, FakeReader(read))
+
+    rows = session.scalars(select(ImportCandidate)).all()
+    assert len(rows) == 1
+    assert rows[0].amount == Decimal("-12.00")
+    assert "split_of_total" not in rows[0].raw
+
+
+def test_a_zero_or_negative_line_item_stays_one_candidate(session, accounts):
+    read = a_receipt(
+        total="12.00",
+        line_items=(item("Milk", "12.00"), item("Discount", "0.00")),
+    )
+    stage(session, accounts, FakeReader(read))
+    assert session.scalar(select(func.count()).select_from(ImportCandidate)) == 1
+
+
+def test_no_line_items_stays_one_candidate(session, accounts):
+    """The default, unsplit case -- pinned explicitly so a future change to
+    the split logic cannot silently start splitting everything."""
+    candidate = stage(session, accounts, FakeReader(a_receipt(total="42.30")))
+    assert session.scalar(select(func.count()).select_from(ImportCandidate)) == 1
+    assert candidate.amount == Decimal("-42.30")
+
+
+def test_each_split_candidate_gets_its_own_category_suggestion(
+    session, accounts, categories, monkeypatch
+):
+    class _FakeCategorySuggester:
+        model = "fake"
+
+        def suggest(self, descriptions, categories):
+            return {"Milk": "Groceries", "Wine": "Restaurants"}
+
+        def verify(self, picks):
+            return {}
+
+    from app.domain import enrichment
+
+    monkeypatch.setattr(enrichment, "build_suggester", lambda: _FakeCategorySuggester())
+
+    read = a_receipt(
+        merchant="WAITROSE",
+        total="15.00",
+        line_items=(item("Milk", "5.00"), item("Wine", "10.00")),
+    )
+    stage(session, accounts, FakeReader(read))
+
+    rows = {r.description: r for r in session.scalars(select(ImportCandidate)).all()}
+    assert rows["Milk"].suggested_category_id == categories["groceries"].id
+    assert rows["Wine"].suggested_category_id == categories["restaurants"].id
+
+
+def test_a_split_candidate_can_still_be_flagged_as_a_duplicate(session, accounts, categories):
+    """One line item matching an already-imported payment is flagged; the
+    sibling line items from the same receipt are not swept in with it."""
+    post(session, date(2026, 8, 18), "Milk",
+         [(accounts["current"], "-2.00"), (accounts["groceries"], "2.00")])
+
+    read = a_receipt(
+        when=date(2026, 8, 18),
+        total="12.00",
+        line_items=(item("Milk", "2.00"), item("Bread", "10.00")),
+    )
+    stage(session, accounts, FakeReader(read))
+
+    rows = {r.description: r for r in session.scalars(select(ImportCandidate)).all()}
+    assert rows["Milk"].status == CandidateStatus.DUPLICATE
+    assert rows["Bread"].status == CandidateStatus.PENDING
+
+
+# --------------------------------------------------------------------------
+# Line-item parsing
+# --------------------------------------------------------------------------
+
+
+def test_line_items_are_read_from_the_reply():
+    read = receipts.parse(
+        '{"total":"12.00","confident":true,"line_items":'
+        '[{"description":"Milk","amount":"2.00"},{"description":"Bread","amount":"10.00"}]}'
+    )
+    assert read.line_items == (item("Milk", "2.00"), item("Bread", "10.00"))
+    assert read.splittable_items == read.line_items
+
+
+def test_a_malformed_line_item_is_dropped_not_fatal():
+    read = receipts.parse(
+        '{"total":"12.00","confident":true,"line_items":'
+        '[{"description":"Milk","amount":"banana"},{"description":"Bread","amount":"10.00"}]}'
+    )
+    assert read.line_items == (item("Bread", "10.00"),)
+
+
+def test_missing_line_items_is_an_empty_tuple():
+    read = receipts.parse('{"total":"12.00","confident":true}')
+    assert read.line_items == ()
+    assert read.splittable_items == ()
+
+
+def test_splittable_items_is_empty_when_the_sum_is_off_by_a_penny():
+    read = a_receipt(total="12.00", line_items=(item("Milk", "2.00"), item("Bread", "9.99")))
+    assert read.splittable_items == ()
 
 
 # --------------------------------------------------------------------------

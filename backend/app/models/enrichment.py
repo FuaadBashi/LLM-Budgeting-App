@@ -41,6 +41,10 @@ class MerchantSuggestion(TimestampedUUID, Base):
     category_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("categories.id", ondelete="CASCADE"), nullable=True
     )
+    #: A tidied display name ("Tesco" for "TESCO STORES 3421 LONDON GB").
+    #: Decoration only -- `example` and the transaction's own `description`
+    #: stay what matching, search and duplicate detection actually read.
+    canonical_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     source: Mapped[SuggestionSource] = mapped_column(
         Enum(SuggestionSource, name="suggestion_source", native_enum=False),
         nullable=False,

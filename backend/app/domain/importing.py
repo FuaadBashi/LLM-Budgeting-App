@@ -23,20 +23,27 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
+from app.domain import providers
 from app.domain.categories import apply_account_defaults
 from app.domain.money import ZERO
 from app.models.enums import AccountKind, CandidateStatus, TransactionStatus
 from app.models.imports import ImportBatch, ImportCandidate
 from app.models.ledger import Account, Posting, Transaction
+
+log = logging.getLogger("uvicorn.error")
 
 #: How far apart two rows can be and still be the same payment. Banks move a
 #: transaction's date by a day or two between "pending" and "settled" exports,
@@ -299,8 +306,131 @@ def _ledger_index(session: Session, account_id, start: date, end: date) -> dict:
     return index
 
 
+#: A second, independent look at the window-matched pairs classify_duplicates
+#: already found -- the amount and description are identical *by construction*
+#: (that is what the fingerprint match means), so the only real question is
+#: whether two nearby dates are one payment recorded twice or two separate,
+#: coincidentally identical charges (the same coffee bought twice in three
+#: days, a bus fare taken there and back).
+DUPLICATE_CHECK_PROMPT = """Each pair below was matched as a possible duplicate:
+same amount, same description, a few days apart. Decide whether this is most
+likely the SAME real payment recorded twice, or two separate, coincidentally
+identical charges.
+
+Reply with JSON only: an object mapping an item's number (as a string) to
+false ONLY when you are confident these are two separate real charges. Omit
+the number otherwise -- a match is the default assumption; you are only ever
+asked to rule one out, never to confirm it.
+
+Items:
+{items}"""
+
+
+class DuplicateChecker(Protocol):
+    def check(self, briefs: list[str]) -> dict[int, bool]: ...
+
+
+class NullDuplicateChecker:
+    """A3. What runs with no provider chosen: nothing, quietly."""
+
+    def check(self, briefs: list[str]) -> dict[int, bool]:
+        return {}
+
+
+class OpenAICompatibleDuplicateChecker:
+    def __init__(self, base_url: str, api_key: str, model: str, max_tokens: int):
+        self._base_url = base_url
+        self._key = api_key
+        self.model = model
+        self._max_tokens = max_tokens
+
+    def check(self, briefs: list[str]) -> dict[int, bool]:
+        try:
+            text = providers.chat(
+                base_url=self._base_url,
+                api_key=self._key,
+                model=self.model,
+                prompt=_duplicate_prompt(briefs),
+                max_tokens=self._max_tokens,
+            )
+        except providers.ProviderError as exc:
+            log.warning("duplicate check request failed: %s", exc)
+            return {}
+        return _parse_duplicate_reply(text, len(briefs))
+
+
+class ClaudeDuplicateChecker:
+    def __init__(self, api_key: str, model: str, max_tokens: int) -> None:
+        self._key = api_key
+        self.model = model
+        self._max_tokens = max_tokens
+
+    def check(self, briefs: list[str]) -> dict[int, bool]:
+        try:
+            import anthropic
+        except ImportError:  # pragma: no cover -- optional dependency
+            log.warning("anthropic package not installed; duplicate check disabled")
+            return {}
+
+        client = anthropic.Anthropic(api_key=self._key)
+        try:
+            reply = client.messages.create(
+                model=self.model,
+                max_tokens=self._max_tokens,
+                messages=[{"role": "user", "content": _duplicate_prompt(briefs)}],
+            )
+            text = "".join(b.text for b in reply.content if b.type == "text")
+        except Exception as exc:  # noqa: BLE001 -- a second opinion is never critical
+            log.warning("duplicate check request failed: %s", exc)
+            return {}
+        return _parse_duplicate_reply(text, len(briefs))
+
+
+def _duplicate_prompt(briefs: list[str]) -> str:
+    items = "\n".join(f"{i}. {b}" for i, b in enumerate(briefs))
+    return DUPLICATE_CHECK_PROMPT.format(items=items)
+
+
+def _parse_duplicate_reply(text: str, count: int) -> dict[int, bool]:
+    body = text.strip()
+    if body.startswith("```"):
+        body = body.split("```")[1] if "```" in body[3:] else body[3:]
+        body = body.removeprefix("json").strip()
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, IndexError):
+        log.warning("could not parse duplicate-check reply")
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict[int, bool] = {}
+    for key, value in parsed.items():
+        try:
+            index = int(key)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= index < count:
+            out[index] = bool(value)
+    return out
+
+
+def build_duplicate_checker() -> DuplicateChecker:
+    """A3: the only place the provider decision is made for this feature."""
+    provider = (settings.llm_provider or "none").strip().lower()
+    if provider == "openai_compatible":
+        return OpenAICompatibleDuplicateChecker(
+            settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_max_tokens
+        )
+    if provider == "anthropic" and settings.anthropic_api_key:
+        return ClaudeDuplicateChecker(
+            settings.anthropic_api_key, settings.llm_model, settings.llm_max_tokens
+        )
+    return NullDuplicateChecker()
+
+
 def classify_duplicates(
-    session: Session, account_id, rows: list[ParsedRow]
+    session: Session, account_id, rows: list[ParsedRow],
+    *, duplicate_checker: DuplicateChecker | None = None,
 ) -> dict[int, tuple[str, object]]:
     """Which rows already exist, and what they duplicate.
 
@@ -332,29 +462,63 @@ def classify_duplicates(
         )
 
     verdicts: dict[int, tuple[str, object]] = {}
+    # (row_number, row, the date it matched against) -- every window match,
+    # kept so a second opinion can be asked about all of them in one batch.
+    matches: list[tuple[int, ParsedRow, date]] = []
     within = lambda a, b: abs((a - b).days) <= DUPLICATE_WINDOW.days  # noqa: E731
 
     for row in rows:
         key = fingerprint(row.booking_date, row.amount, row.description)
 
-        hit = next(
-            (i for when, i in index.get(key, []) if within(when, row.booking_date)),
+        found = next(
+            ((when, i) for when, i in index.get(key, []) if within(when, row.booking_date)),
             None,
         )
-        if hit is not None:
+        if found is not None:
+            when, hit = found
             verdicts[row.row_number] = ("transaction", hit)
+            matches.append((row.row_number, row, when))
             continue
 
-        hit = next(
-            (i for when, i in seen.get(key, []) if within(when, row.booking_date)),
+        found = next(
+            ((when, i) for when, i in seen.get(key, []) if within(when, row.booking_date)),
             None,
         )
-        if hit is not None:
+        if found is not None:
+            when, hit = found
             verdicts[row.row_number] = ("candidate", hit)
+            matches.append((row.row_number, row, when))
             continue
 
         # Not a duplicate, but later rows in this same file may duplicate it.
         seen.setdefault(key, []).append((row.booking_date, row.row_number))
+
+    # A second, independent opinion on every window match -- see
+    # DUPLICATE_CHECK_PROMPT. This only ever removes a verdict (an explicit
+    # False), never adds or confirms one: A3 with no provider, an empty
+    # reply, or the model simply agreeing all leave every verdict exactly as
+    # the window match already decided it.
+    if matches:
+        checker = duplicate_checker if duplicate_checker is not None else build_duplicate_checker()
+        briefs = [
+            f"Amount {row.amount:.2f}, description '{row.description}': existing "
+            f"charge on {matched_when.isoformat()}, this one on {row.booking_date.isoformat()}."
+            for _, row, matched_when in matches
+        ]
+        # Caught here rather than pushed to the caller the way enrichment.
+        # resolve's does: M2 (duplicate detection looks both ways) is a hard
+        # requirement classify_duplicates must keep even when this optional
+        # enhancement fails, and this function has two callers (statement
+        # import and receipts) that would each need their own identical
+        # guard to protect the base window match otherwise.
+        try:
+            opinions = checker.check(briefs)
+        except Exception as exc:  # noqa: BLE001 -- a second opinion is never critical
+            log.warning("duplicate check skipped: %s", exc)
+            opinions = {}
+        for i, (row_number, _row, _when) in enumerate(matches):
+            if opinions.get(i) is False:
+                del verdicts[row_number]
 
     return verdicts
 
@@ -459,6 +623,25 @@ def stage(
 
         logging.getLogger("uvicorn.error").warning(
             "category suggestion skipped: %s", exc
+        )
+
+    # Tidied display names, same cache-first shape, same "never fail the
+    # import" rule. Decoration only -- description stays the raw bank text.
+    try:
+        from app.domain import canonical
+
+        names = canonical.resolve(session, [row.description for row in rows])
+        for row in rows:
+            key = normalise_description(row.description)
+            name = names.get(key)
+            if name:
+                candidate = by_row[row.row_number]
+                candidate.raw = {**candidate.raw, "canonical_name": name}
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("uvicorn.error").warning(
+            "canonical name lookup skipped: %s", exc
         )
 
     # Intra-file duplicates are resolved after the flush, when the earlier row

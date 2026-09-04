@@ -435,3 +435,153 @@ def test_far_apart_payments_with_the_same_key_are_not_duplicates():
     _, rows = importing.parse(text)
     assert rows[0].amount == rows[1].amount
     assert (rows[1].booking_date - rows[0].booking_date).days > 3
+
+
+# --------------------------------------------------------------------------
+# A second opinion on a window match -- only ever narrows, never confirms
+# --------------------------------------------------------------------------
+
+
+class FakeDuplicateChecker:
+    def __init__(self, answers: dict[int, bool] | None = None):
+        self.answers = answers or {}
+        self.calls: list[list[str]] = []
+
+    def check(self, briefs):
+        self.calls.append(list(briefs))
+        return dict(self.answers)
+
+
+class ExplodingDuplicateChecker:
+    def check(self, briefs):
+        raise RuntimeError("the network is down")
+
+
+def _one_row(when=date(2026, 8, 18), amount="-4.85", description="PRET"):
+    return importing.ParsedRow(
+        row_number=1, booking_date=when, description=description,
+        merchant=None, amount=Decimal(amount), raw={},
+    )
+
+
+def test_an_explicit_false_demotes_a_ledger_match(session, accounts):
+    post(session, date(2026, 8, 17), "PRET",
+         [(accounts["current"], "-4.85"), (accounts["groceries"], "4.85")])
+
+    fake = FakeDuplicateChecker({0: False})
+    verdicts = importing.classify_duplicates(
+        session, accounts["current"].id, [_one_row(date(2026, 8, 18))],
+        duplicate_checker=fake,
+    )
+    assert verdicts == {}
+
+
+def test_true_leaves_the_window_match_in_place(session, accounts):
+    post(session, date(2026, 8, 17), "PRET",
+         [(accounts["current"], "-4.85"), (accounts["groceries"], "4.85")])
+
+    fake = FakeDuplicateChecker({0: True})
+    verdicts = importing.classify_duplicates(
+        session, accounts["current"].id, [_one_row(date(2026, 8, 18))],
+        duplicate_checker=fake,
+    )
+    assert 1 in verdicts
+
+
+def test_no_opinion_leaves_the_window_match_in_place(session, accounts):
+    """A match is the default assumption -- an absent answer changes nothing,
+    same as it does for enrichment's downgrade-only verify()."""
+    post(session, date(2026, 8, 17), "PRET",
+         [(accounts["current"], "-4.85"), (accounts["groceries"], "4.85")])
+
+    fake = FakeDuplicateChecker({})
+    verdicts = importing.classify_duplicates(
+        session, accounts["current"].id, [_one_row(date(2026, 8, 18))],
+        duplicate_checker=fake,
+    )
+    assert 1 in verdicts
+
+
+def test_no_window_match_means_no_call_at_all(session, accounts):
+    """Nothing to ask a second opinion about when the first pass found no
+    match -- the common case, and it must not cost a call."""
+    fake = FakeDuplicateChecker()
+    importing.classify_duplicates(
+        session, accounts["current"].id, [_one_row()], duplicate_checker=fake,
+    )
+    assert fake.calls == []
+
+
+def test_every_window_match_is_sent_in_one_batched_call(session, accounts):
+    post(session, date(2026, 8, 17), "PRET",
+         [(accounts["current"], "-4.85"), (accounts["groceries"], "4.85")])
+    post(session, date(2026, 8, 17), "TESCO",
+         [(accounts["current"], "-10.00"), (accounts["groceries"], "10.00")])
+
+    fake = FakeDuplicateChecker()
+    rows = [
+        _one_row(date(2026, 8, 18), "-4.85", "PRET"),
+        importing.ParsedRow(
+            row_number=2, booking_date=date(2026, 8, 18), description="TESCO",
+            merchant=None, amount=Decimal("-10.00"), raw={},
+        ),
+    ]
+    importing.classify_duplicates(
+        session, accounts["current"].id, rows, duplicate_checker=fake,
+    )
+    assert len(fake.calls) == 1
+    assert len(fake.calls[0]) == 2
+
+
+def test_a_failing_checker_leaves_the_window_match_in_place(session, accounts):
+    """A failed second opinion is the same as no opinion -- the deterministic
+    window match it was double-checking is what stands, same as the other
+    verify()-style features in this codebase (enrichment.resolve,
+    canonical.resolve): a second opinion is never critical."""
+    post(session, date(2026, 8, 17), "PRET",
+         [(accounts["current"], "-4.85"), (accounts["groceries"], "4.85")])
+    verdicts = importing.classify_duplicates(
+        session, accounts["current"].id, [_one_row(date(2026, 8, 18))],
+        duplicate_checker=ExplodingDuplicateChecker(),
+    )
+    assert 1 in verdicts
+
+
+def test_a_failing_checker_does_not_fail_the_import(client, accounts, session, monkeypatch):
+    post(session, date(2026, 8, 17), "PRET A MANGER",
+         [(accounts["current"], "-4.85"), (accounts["groceries"], "4.85")])
+    monkeypatch.setattr(
+        importing, "build_duplicate_checker", lambda: ExplodingDuplicateChecker()
+    )
+    r = upload(
+        client, accounts["current"].id,
+        "date,description,amount\n2026-08-18,PRET A MANGER,-4.85\n",
+    )
+    assert r.status_code == 201
+    row = session.scalars(select(ImportCandidate)).one()
+    assert row.status == CandidateStatus.DUPLICATE
+
+
+# --------------------------------------------------------------------------
+# Reply parsing
+# --------------------------------------------------------------------------
+
+
+def test_a_fenced_duplicate_reply_is_read():
+    assert importing._parse_duplicate_reply('```json\n{"0": false}\n```', 1) == {0: False}
+
+
+def test_an_out_of_range_index_is_dropped():
+    assert importing._parse_duplicate_reply('{"5": false}', count=1) == {}
+
+
+def test_an_unparseable_duplicate_reply_is_empty_not_an_exception():
+    assert importing._parse_duplicate_reply("not json", count=1) == {}
+    assert importing._parse_duplicate_reply("", count=1) == {}
+
+
+def test_no_provider_means_no_duplicate_checker(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_provider", "none")
+    assert isinstance(importing.build_duplicate_checker(), importing.NullDuplicateChecker)

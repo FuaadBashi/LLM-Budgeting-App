@@ -42,6 +42,14 @@ def _auth_disabled_by_default(monkeypatch):
     # writing real backups into backend/backups/. Tests that care about backups
     # point BACKUP_DIR at tmp_path and call the code directly.
     monkeypatch.setattr(settings, "backup_enabled", False)
+    # And with every LLM feature off. This install has a real provider
+    # configured (see docs/HANDOFF.md), so without this override every test
+    # that reaches classify_duplicates/enrichment.resolve/receipts.stage
+    # through its default (no fake injected) path would make a real call to
+    # the local model -- exactly the "depends on local configuration"
+    # failure mode this fixture exists to prevent. Tests that care about
+    # provider-selection logic switch it on themselves.
+    monkeypatch.setattr(settings, "llm_provider", "none")
 
 
 @pytest.fixture(scope="session")

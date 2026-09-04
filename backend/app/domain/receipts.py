@@ -52,7 +52,10 @@ PROMPT = """Read this receipt and reply with JSON only, no explanation:
   "merchant": "shop name as printed, or null",
   "date": "YYYY-MM-DD, or null if not printed",
   "total": "the grand total as a decimal string, or null",
-  "confident": true or false
+  "confident": true or false,
+  "line_items": [
+    {"description": "what the line says", "amount": "decimal string"}
+  ]
 }
 
 Rules:
@@ -60,7 +63,10 @@ Rules:
 - If the image is blurred, cropped, or is not a receipt, set confident to false
   and return nulls rather than guessing. A wrong number is far worse than none:
   a person has to check every field either way, and a plausible wrong total is
-  the one that gets waved through."""
+  the one that gets waved through.
+- line_items is optional -- an empty list if the receipt has one purchase, is
+  too unclear to itemise, or the lines do not cleanly sum to the total. Do not
+  force a split; a single correct total beats several guessed line amounts."""
 
 #: A second, independent look at the same image -- a deliberately different
 #: task from PROMPT (checking a specific claim rather than open-ended reading),
@@ -90,16 +96,44 @@ class ReceiptError(Exception):
 
 
 @dataclass(frozen=True)
+class LineItem:
+    description: str
+    amount: Decimal
+
+
+@dataclass(frozen=True)
 class ReceiptRead:
     merchant: str | None
     when: date | None
     total: Decimal | None
     confident: bool
+    #: Only ever used when it sums to `total` -- see `_splittable`. Anything
+    #: else (empty, partial, off by a penny) means one candidate for the
+    #: whole receipt, same as before this field existed.
+    line_items: tuple[LineItem, ...] = ()
 
     @property
     def usable(self) -> bool:
         """Enough to stage a row a person can check."""
         return self.total is not None and self.total > ZERO
+
+    @property
+    def splittable_items(self) -> tuple["LineItem", ...]:
+        """`line_items`, but only when they actually sum to `total`.
+
+        A receipt candidate is a claim about money; a split that does not
+        reconcile with the total it is supposed to make up is not safe to
+        stage as several claims instead of one. This is plain arithmetic on
+        already-parsed Decimals, not a second model call -- there is nothing
+        fuzzy to ask an opinion about.
+        """
+        if not self.line_items or self.total is None:
+            return ()
+        if any(item.amount <= ZERO for item in self.line_items):
+            return ()
+        if sum((item.amount for item in self.line_items), ZERO) != self.total:
+            return ()
+        return self.line_items
 
 
 @dataclass(frozen=True)
@@ -333,7 +367,29 @@ def parse(text: str) -> ReceiptRead:
         when=when,
         total=total,
         confident=bool(raw.get("confident")),
+        line_items=_parse_line_items(raw.get("line_items")),
     )
+
+
+def _parse_line_items(raw: object) -> tuple[LineItem, ...]:
+    """Malformed entries are dropped individually rather than discarding the
+    whole list -- `splittable_items` is what actually decides whether any of
+    this is safe to stage, by checking the surviving items still sum right."""
+    if not isinstance(raw, list):
+        return ()
+    items: list[LineItem] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        description = str(entry.get("description") or "").strip()[:240]
+        try:
+            amount = Decimal(str(entry.get("amount")).replace(",", "").strip().lstrip("£$€"))
+        except (InvalidOperation, AttributeError, TypeError):
+            continue
+        if not description:
+            continue
+        items.append(LineItem(description=description, amount=amount))
+    return tuple(items)
 
 
 def build_reader() -> Reader | NullReader:
@@ -408,25 +464,35 @@ def stage(
         log.warning("receipt verification skipped: %s", exc)
         verification = None
 
-    description = read.merchant or "Receipt"
     when = read.when or today
 
     notes = [] if read.confident else ["The reader was not confident in this."]
     if verification is not None and not verification.matches and verification.note:
         notes.append(f"Second check: {verification.note}")
 
+    # A line-item split only ever happens when the lines actually sum to the
+    # total that was read (splittable_items enforces this) -- anything else,
+    # including a receipt the model didn't itemise at all, is one candidate
+    # for the whole amount, exactly as before this feature existed.
+    split = read.splittable_items
+    items = (
+        list(split)
+        if split
+        else [LineItem(description=read.merchant or "Receipt", amount=read.total)]
+    )
+
     batch = ImportBatch(
         filename=filename,
         content_hash=digest,
         account_id=account_id,
         profile="receipt",
-        row_count=1,
+        row_count=len(items),
         notes=" ".join(notes),
     )
     session.add(batch)
     session.flush()
 
-    # Classify BEFORE the candidate exists. `classify_duplicates` scans staged
+    # Classify BEFORE any candidate exists. `classify_duplicates` scans staged
     # candidates as well as the ledger, so a row flushed first finds itself and
     # is flagged as its own duplicate.
     verdicts = importing.classify_duplicates(
@@ -434,69 +500,94 @@ def stage(
         account_id,
         [
             importing.ParsedRow(
-                row_number=1, booking_date=when, description=description,
-                merchant=read.merchant, amount=-abs(read.total), raw={},
+                row_number=i, booking_date=when, description=item.description,
+                merchant=read.merchant, amount=-abs(item.amount), raw={},
             )
+            for i, item in enumerate(items, start=1)
         ],
     )
-    verdict = verdicts.get(1)
 
-    candidate = ImportCandidate(
-        batch_id=batch.id,
-        row_number=1,
-        # The raw read, kept verbatim, because the interpretation may be wrong
-        # and the photograph is not stored.
-        raw={
-            "merchant": read.merchant,
-            "date": read.when.isoformat() if read.when else None,
-            "total": str(read.total),
-            "confident": read.confident,
-            "source": "receipt",
-            # Flat primitives, not a nested object -- the frontend renders
-            # every `raw` entry generically, and a dict child would crash it.
-            "verification_matches": None if verification is None else verification.matches,
-            "verification_note": "" if verification is None else verification.note,
-        },
-        booking_date=when,
-        description=description,
-        merchant=read.merchant,
-        # Money out. A receipt is evidence of a payment, not of income.
-        amount=-abs(read.total),
-        fingerprint=importing.fingerprint(when, -abs(read.total), description),
-        status=CandidateStatus.PENDING,
-    )
-    # Same duplicate check a statement row gets: a receipt for a payment already
-    # imported from the bank is the common case, not the exception.
-    if verdict is not None:
-        kind, target = verdict
-        candidate.status = CandidateStatus.DUPLICATE
-        if kind == "transaction":
-            candidate.duplicate_of_transaction_id = target
+    candidates: list[ImportCandidate] = []
+    for i, item in enumerate(items, start=1):
+        candidate = ImportCandidate(
+            batch_id=batch.id,
+            row_number=i,
+            # The raw read, kept verbatim, because the interpretation may be
+            # wrong and the photograph is not stored.
+            raw={
+                "merchant": read.merchant,
+                "date": read.when.isoformat() if read.when else None,
+                "total": str(item.amount),
+                "confident": read.confident,
+                "source": "receipt",
+                # Flat primitives, not a nested object -- the frontend renders
+                # every `raw` entry generically, and a dict child would crash it.
+                "verification_matches": None if verification is None else verification.matches,
+                "verification_note": "" if verification is None else verification.note,
+                **({"split_of_total": str(read.total)} if len(items) > 1 else {}),
+            },
+            booking_date=when,
+            description=item.description,
+            merchant=read.merchant,
+            # Money out. A receipt is evidence of a payment, not of income.
+            amount=-abs(item.amount),
+            fingerprint=importing.fingerprint(when, -abs(item.amount), item.description),
+            status=CandidateStatus.PENDING,
+        )
+        # Same duplicate check a statement row gets: a receipt for a payment
+        # already imported from the bank is the common case, not the exception.
+        verdict = verdicts.get(i)
+        if verdict is not None:
+            kind, target = verdict
+            candidate.status = CandidateStatus.DUPLICATE
+            if kind == "transaction":
+                candidate.duplicate_of_transaction_id = target
+        session.add(candidate)
+        candidates.append(candidate)
 
-    session.add(candidate)
     session.flush()
 
     try:
         from app.domain import enrichment
 
-        key = importing.normalise_description(description)
+        descriptions = [c.description for c in candidates]
         category_flagged: dict[str, str] = {}
         suggestions = enrichment.resolve(
-            session, [description], flagged=category_flagged
+            session, descriptions, flagged=category_flagged
         )
-        candidate.suggested_category_id = suggestions.get(key)
-        if key in category_flagged:
-            # Appended, not overwritten -- the image read may already have
-            # left its own note here, and both are worth a second look.
-            note = f"A second look didn't agree this was {category_flagged[key]}."
-            existing = candidate.raw.get("verification_note") or ""
-            candidate.raw = {
-                **candidate.raw,
-                "verification_note": f"{existing} {note}".strip(),
-            }
+        for candidate in candidates:
+            key = importing.normalise_description(candidate.description)
+            candidate.suggested_category_id = suggestions.get(key)
+            if key in category_flagged:
+                # Appended, not overwritten -- the image read may already
+                # have left its own note here, and both are worth a look.
+                note = f"A second look didn't agree this was {category_flagged[key]}."
+                existing = candidate.raw.get("verification_note") or ""
+                candidate.raw = {
+                    **candidate.raw,
+                    "verification_note": f"{existing} {note}".strip(),
+                }
     except Exception as exc:  # noqa: BLE001
         log.warning("category suggestion skipped for receipt: %s", exc)
 
+    try:
+        from app.domain import canonical
+
+        descriptions = [c.description for c in candidates]
+        names = canonical.resolve(session, descriptions)
+        for candidate in candidates:
+            key = importing.normalise_description(candidate.description)
+            name = names.get(key)
+            if name:
+                candidate.raw = {**candidate.raw, "canonical_name": name}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("canonical name lookup skipped for receipt: %s", exc)
+
     session.commit()
-    session.refresh(candidate)
-    return candidate
+    for candidate in candidates:
+        session.refresh(candidate)
+    # The primary candidate -- callers that only handle one (the upload
+    # route's response) get the receipt as a whole; every candidate, split or
+    # not, is reachable the same way any other staged row is: through the
+    # inbox list, not just this call's return value.
+    return candidates[0]
