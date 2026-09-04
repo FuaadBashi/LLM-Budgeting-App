@@ -551,8 +551,6 @@ export interface Insight {
   /** What this insight is about, when it's about one specific thing. */
   subject_merchant: string | null;
   subject_category_id: string | null;
-  /** A friendlier rewrite of `detail`, or null with no provider configured. */
-  narration: string | null;
 }
 
 export interface BackupFile {
@@ -578,6 +576,10 @@ export const getBackupStatus = () => get<BackupStatus>("/backups");
 export const runBackup = () => post<BackupStatus>("/backups", {});
 
 export const getInsights = () => get<Insight[]>("/insights");
+/** Keyed by index into the same list getInsights() just returned -- fetched
+ *  separately, after the fact, so a slow local model never blocks the page
+ *  that already rendered correctly without it. */
+export const getInsightNarrations = () => get<Record<string, string>>("/insights/narrations");
 export const explainSafeToSpend = () =>
   get<Derivation>("/explain/safe-to-spend");
 export const explainTotalAccessible = () =>

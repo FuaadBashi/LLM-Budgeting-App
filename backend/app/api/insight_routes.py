@@ -7,6 +7,7 @@ nowhere to act from.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date
 
@@ -17,6 +18,8 @@ from sqlalchemy.orm import Session
 from app.api.schemas import to_minor
 from app.db import get_session
 from app.domain import explain, insights, narrate
+
+log = logging.getLogger("uvicorn.error")
 
 router = APIRouter()
 
@@ -53,11 +56,6 @@ class InsightOut(BaseModel):
     #: lets the client link straight to the transactions behind it.
     subject_merchant: str | None
     subject_category_id: uuid.UUID | None
-    #: A friendlier rewrite of `detail`, built only from the evidence already
-    #: attached (see domain/narrate.py). None with no provider, or if the
-    #: model produced nothing usable -- `detail` is always a complete
-    #: sentence on its own and is what the client falls back to.
-    narration: str | None
 
 
 def _term(t: explain.Term) -> TermOut:
@@ -111,41 +109,54 @@ def explain_budget(
     return _derivation(result)
 
 
+def _insight_out(i: insights.Insight) -> InsightOut:
+    return InsightOut(
+        kind=i.kind,
+        severity=i.severity,
+        title=i.title,
+        detail=i.detail,
+        action=i.action,
+        evidence=[
+            EvidenceOut(
+                label=e.label,
+                amount_minor=to_minor(e.amount) if e.amount is not None else None,
+                detail=e.detail,
+            )
+            for e in i.evidence
+        ],
+        subject_merchant=i.subject_merchant,
+        subject_category_id=i.subject_category_id,
+    )
+
+
 @router.get("/insights", response_model=list[InsightOut])
 def list_insights(
     on: date | None = None, session: Session = Depends(get_session)
 ) -> list[InsightOut]:
-    """Everything worth mentioning, worst first."""
+    """Everything worth mentioning, worst first.
+
+    Deliberately has no narration in it. `detail` is already a complete,
+    correct sentence for every insight -- narration is decoration this
+    screen must never wait on to open. See /insights/narrations.
+    """
+    return [_insight_out(i) for i in insights.collect(session, on)]
+
+
+@router.get("/insights/narrations", response_model=dict[int, str])
+def insight_narrations(
+    on: date | None = None, session: Session = Depends(get_session)
+) -> dict[int, str]:
+    """Plain-English rewrites, keyed by index into the same /insights list.
+
+    A separate call so a slow or unreliable local model can never block the
+    page that already rendered correctly without it -- the client fetches
+    this after the fact and upgrades whichever cards get an answer. One
+    batched call for the whole page rather than one per insight; see
+    domain/narrate.py for why this is the one LLM feature with no cache.
+    """
     found = insights.collect(session, on)
-
-    # One batched call for the whole page rather than one per insight -- see
-    # domain/narrate.py for why this is the one LLM feature with no cache.
     try:
-        narrations = narrate.narrate_all(found)
+        return narrate.narrate_all(found)
     except Exception as exc:  # noqa: BLE001 -- a narration is never critical
-        import logging
-
-        logging.getLogger("uvicorn.error").warning("narration skipped: %s", exc)
-        narrations = {}
-
-    return [
-        InsightOut(
-            kind=i.kind,
-            severity=i.severity,
-            title=i.title,
-            detail=i.detail,
-            action=i.action,
-            evidence=[
-                EvidenceOut(
-                    label=e.label,
-                    amount_minor=to_minor(e.amount) if e.amount is not None else None,
-                    detail=e.detail,
-                )
-                for e in i.evidence
-            ],
-            subject_merchant=i.subject_merchant,
-            subject_category_id=i.subject_category_id,
-            narration=narrations.get(index),
-        )
-        for index, i in enumerate(found)
-    ]
+        log.warning("narration skipped: %s", exc)
+        return {}

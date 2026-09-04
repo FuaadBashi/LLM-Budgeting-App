@@ -143,15 +143,29 @@ def test_an_unparseable_reply_is_empty_not_an_exception():
 # --------------------------------------------------------------------------
 
 
-def test_the_insights_endpoint_carries_a_narration_field(client, categories):
-    """A3 end to end: no provider configured for the test suite, so every
-    insight (if any fire) carries narration=None rather than erroring."""
+def test_the_insights_endpoint_carries_no_narration_field(client, categories):
+    """/insights must never wait on the model -- narration lives at its own
+    endpoint entirely, so a slow or unreliable local model can never block
+    the page that already has a complete `detail` sentence for every insight."""
     r = client.get("/api/insights")
     assert r.status_code == 200
-    assert all("narration" in item for item in r.json())
+    assert all("narration" not in item for item in r.json())
 
 
-def test_a_failing_narrator_does_not_fail_the_insights_endpoint(
+def test_the_narrations_endpoint_answers_by_index(client, monkeypatch):
+    from app.api import insight_routes
+
+    monkeypatch.setattr(insight_routes.insights, "collect", lambda session, on: [an_insight()])
+    monkeypatch.setattr(
+        insight_routes.narrate, "narrate_all", lambda found: {0: "Groceries crept up."}
+    )
+
+    r = client.get("/api/insights/narrations")
+    assert r.status_code == 200
+    assert r.json() == {"0": "Groceries crept up."}
+
+
+def test_a_failing_narrator_does_not_fail_the_narrations_endpoint(
     client, monkeypatch
 ):
     """Forces at least one insight to exist so the exploding narrator is
@@ -163,6 +177,6 @@ def test_a_failing_narrator_does_not_fail_the_insights_endpoint(
     monkeypatch.setattr(insight_routes.insights, "collect", lambda session, on: [an_insight()])
     monkeypatch.setattr(narrate_module, "build_narrator", lambda: ExplodingNarrator())
 
-    r = client.get("/api/insights")
+    r = client.get("/api/insights/narrations")
     assert r.status_code == 200
-    assert r.json()[0]["narration"] is None
+    assert r.json() == {}

@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import type { Derivation, Insight, Severity, Term } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { getInsightNarrations, type Derivation, type Insight, type Severity, type Term } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 
 /**
@@ -34,6 +34,28 @@ export function InsightPanel({
   insights: Insight[];
   derivations: Derivation[];
 }) {
+  // Fetched after the page has already rendered with each insight's own
+  // `detail` -- a slow or unreliable local model must never be why this
+  // screen takes a while to open. A card simply upgrades in place if and
+  // when an answer arrives; nothing here is an error state if it doesn't.
+  const [narrations, setNarrations] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (insights.length === 0) return;
+    let cancelled = false;
+    getInsightNarrations()
+      .then((result) => {
+        if (!cancelled) setNarrations(result);
+      })
+      .catch(() => {
+        // Decoration only -- silently keep showing each insight's own detail.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [insights.length]);
+
   return (
     <div className="space-y-8">
       <section>
@@ -55,7 +77,11 @@ export function InsightPanel({
         ) : (
           <ul className="space-y-3">
             {insights.map((insight, index) => (
-              <InsightCard key={`${insight.kind}-${index}`} insight={insight} />
+              <InsightCard
+                key={`${insight.kind}-${index}`}
+                insight={insight}
+                narration={narrations[index]}
+              />
             ))}
           </ul>
         )}
@@ -77,7 +103,7 @@ export function InsightPanel({
   );
 }
 
-function InsightCard({ insight }: { insight: Insight }) {
+function InsightCard({ insight, narration }: { insight: Insight; narration?: string }) {
   const [open, setOpen] = useState(false);
   const s = SEVERITY[insight.severity] ?? SEVERITY.warning;
 
@@ -111,10 +137,11 @@ function InsightCard({ insight }: { insight: Insight }) {
       </div>
 
       <p className="mt-1.5 text-sm" style={{ color: "var(--text-secondary)" }}>
-        {/* narration is a friendlier rewrite of the same facts, built only
-            from this insight's own evidence -- detail (always a complete
-            sentence on its own) is the fallback with no provider. */}
-        {insight.narration ?? insight.detail}
+        {/* narration is a friendlier rewrite of the same facts, fetched
+            separately after the page already rendered -- detail (always a
+            complete sentence on its own) is the fallback until, or unless,
+            one arrives. */}
+        {narration ?? insight.detail}
       </p>
 
       {insight.action && (
