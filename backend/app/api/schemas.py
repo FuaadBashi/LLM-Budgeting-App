@@ -52,6 +52,17 @@ class AccountIn(BaseModel):
     default_category_id: uuid.UUID | None = None
 
 
+class ReconciliationOut(BaseModel):
+    account_id: uuid.UUID
+    as_of: date
+    computed_balance_minor: int
+    stated_balance_minor: int
+    #: stated - computed. Positive means the bank shows more than the ledger
+    #: does -- a payment the ledger has not recorded yet, most often.
+    difference_minor: int
+    matches: bool
+
+
 class AccountEditIn(BaseModel):
     """Partial update. Only the fields actually sent are applied.
 

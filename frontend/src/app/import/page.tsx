@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/AppShell";
 import { ImportInbox } from "@/components/ImportInbox";
+import { ReconcileForm } from "@/components/ReconcileForm";
 import { requireSession } from "@/lib/guard";
 import {
   getAccounts,
@@ -56,12 +57,15 @@ export default async function ImportPage() {
             Could not reach the API ({error}).
           </div>
         ) : (
-          <ImportInbox
-            batches={batches}
-            candidates={candidates}
-            accounts={accounts}
-            categories={categories}
-          />
+          <>
+            <ImportInbox
+              batches={batches}
+              candidates={candidates}
+              accounts={accounts}
+              categories={categories}
+            />
+            <ReconcileForm accounts={accounts} />
+          </>
         )}
       </main>
     </AppShell>

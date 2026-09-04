@@ -24,6 +24,7 @@ from app.api.schemas import (
     CategoryOut,
     NetWorthOut,
     PostingOut,
+    ReconciliationOut,
     SafeToSpendOut,
     TransactionEditIn,
     TransactionIn,
@@ -141,6 +142,37 @@ def edit_account(
     session.commit()
     balances = account_balances(session)
     return _account_out(account, to_minor(balances.get(account.id, from_minor(0))))
+
+
+@router.get("/accounts/{account_id}/reconcile", response_model=ReconciliationOut)
+def reconcile_account(
+    account_id: uuid.UUID,
+    as_of: date,
+    stated_balance_minor: int,
+    session: Session = Depends(get_session),
+) -> ReconciliationOut:
+    """Does the ledger's computed balance agree with what the bank says?
+
+    Nothing is written or remembered -- this is a read, exactly like every
+    other figure in the app (Rule: "Derived, never stored"). Duplicate
+    detection catches a row repeated; nothing catches a row that was missed
+    entirely, and a missed row is invisible until something outside the
+    ledger is compared against it. This is that comparison, on demand,
+    rather than a standing reconciliation record to keep in sync.
+    """
+    account = session.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+
+    computed = to_minor(account_balances(session, as_of).get(account.id, from_minor(0)))
+    return ReconciliationOut(
+        account_id=account_id,
+        as_of=as_of,
+        computed_balance_minor=computed,
+        stated_balance_minor=stated_balance_minor,
+        difference_minor=stated_balance_minor - computed,
+        matches=stated_balance_minor == computed,
+    )
 
 
 # --------------------------------------------------------------------------

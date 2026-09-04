@@ -42,6 +42,17 @@ export interface Account {
   default_category_id: string | null;
 }
 
+export interface Reconciliation {
+  account_id: string;
+  as_of: string;
+  computed_balance_minor: Minor;
+  stated_balance_minor: Minor;
+  /** stated - computed. Positive means the bank shows more than the ledger
+   *  does -- a payment the ledger has not recorded yet, most often. */
+  difference_minor: Minor;
+  matches: boolean;
+}
+
 export interface Category {
   id: string;
   name: string;
@@ -464,6 +475,10 @@ async function send<T>(path: string, body: unknown, method: string): Promise<T> 
 
 export const getSafeToSpend = () => get<SafeToSpend>("/dashboard/safe-to-spend");
 export const getAccounts = () => get<Account[]>("/accounts");
+export const reconcileAccount = (accountId: string, asOf: string, statedBalanceMinor: number) =>
+  get<Reconciliation>(
+    `/accounts/${accountId}/reconcile?as_of=${asOf}&stated_balance_minor=${statedBalanceMinor}`,
+  );
 export const getCategories = () => get<Category[]>("/categories");
 export const createTransaction = (input: TransactionInput) =>
   post<Transaction>("/transactions", input);
