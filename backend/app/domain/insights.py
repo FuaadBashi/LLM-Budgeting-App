@@ -69,6 +69,13 @@ class Insight:
     evidence: tuple[Evidence, ...] = ()
     #: What the user could do. Never done automatically -- E3.
     action: str = ""
+    #: What this insight is about, when it is about one specific thing --
+    #: lets the UI link straight to the transactions behind it instead of
+    #: leaving "check the transactions" as an instruction with nowhere to
+    #: click. Not every insight is about a single merchant or category (a
+    #: whole-budget warning can span several), so both default to unset.
+    subject_merchant: str | None = None
+    subject_category_id: object | None = None
 
 
 def _month_bounds(day: date) -> tuple[date, date]:
@@ -137,6 +144,7 @@ def _merchant_insight(budget_name: str, anomaly: MerchantAnomaly) -> Insight:
             ),
         ),
         action="Check the transactions for this merchant.",
+        subject_merchant=anomaly.merchant,
     )
 
 
@@ -250,6 +258,7 @@ def category_trends(session: Session, today: date) -> list[Insight]:
                     Evidence("Difference", gap),
                 ),
                 action="Check the transactions behind it before assuming it is a blip.",
+                subject_category_id=row.category_id,
             )
         )
     return out
@@ -327,6 +336,7 @@ def untracked_recurring(session: Session, today: date) -> list[Insight]:
                     ),
                 ),
                 action="Add it as a commitment so it is reserved before you spend.",
+                subject_merchant=name,
             )
         )
     return out

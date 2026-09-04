@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.api.schemas import from_minor, to_minor
 from app.db import get_session
 from app.domain.clock import today as clock_today
+from app.domain.simulation import add_months
 from app.models import GoalContribution, GoalPriority, SavingsGoal
 
 router = APIRouter()
@@ -74,11 +75,29 @@ class GoalOut(BaseModel):
     active: bool
     #: Fraction of the target reached, 0..1. None when the target is zero.
     progress: float | None
+    #: Months to reach the target at the current planned contribution, or
+    #: None if nothing is being contributed and it never will.
+    months_to_completion: int | None
+    projected_completion_date: date | None
 
 
-def _out(goal: SavingsGoal) -> GoalOut:
+def _out(goal: SavingsGoal, today: date) -> GoalOut:
     target = goal.target_amount
     attributed = goal.attributed_balance
+    contribution = goal.planned_contribution
+    remaining = target - attributed
+
+    # Same arithmetic the simulator runs for a hypothetical goal
+    # (simulation._goal_projections) -- a real goal deserves the same
+    # answer to "at this rate, done by when" without waiting for a scenario.
+    if remaining <= Decimal("0"):
+        months_to: int | None = 0
+    elif contribution <= Decimal("0"):
+        months_to = None
+    else:
+        months_to = int((remaining / contribution).to_integral_value(rounding="ROUND_CEILING"))
+    completion = add_months(today, months_to) if months_to is not None else None
+
     return GoalOut(
         id=goal.id,
         name=goal.name,
@@ -92,6 +111,8 @@ def _out(goal: SavingsGoal) -> GoalOut:
         account_id=goal.account_id,
         active=goal.active,
         progress=float(attributed / target) if target > Decimal("0") else None,
+        months_to_completion=months_to,
+        projected_completion_date=completion,
     )
 
 
@@ -109,7 +130,8 @@ def list_goals(
     query = select(SavingsGoal)
     if not include_inactive:
         query = query.where(SavingsGoal.active.is_(True))
-    return [_out(g) for g in session.scalars(query.order_by(SavingsGoal.name))]
+    today = clock_today(session)
+    return [_out(g, today) for g in session.scalars(query.order_by(SavingsGoal.name))]
 
 
 @router.post("/goals", response_model=GoalOut, status_code=201)
@@ -130,7 +152,7 @@ def create_goal(payload: GoalIn, session: Session = Depends(get_session)) -> Goa
         session.rollback()
         raise HTTPException(status_code=422, detail=str(exc.orig)) from exc
     session.refresh(goal)
-    return _out(goal)
+    return _out(goal, clock_today(session))
 
 
 @router.patch("/goals/{goal_id}", response_model=GoalOut)
@@ -165,7 +187,7 @@ def update_goal(
         session.rollback()
         raise HTTPException(status_code=422, detail=str(exc.orig)) from exc
     session.refresh(goal)
-    return _out(goal)
+    return _out(goal, clock_today(session))
 
 
 @router.post("/goals/{goal_id}/contributions", response_model=GoalOut, status_code=201)
@@ -194,4 +216,4 @@ def add_contribution(
         # G1: attributions cannot exceed the savings account's balance.
         raise HTTPException(status_code=422, detail=str(exc.orig)) from exc
     session.refresh(goal)
-    return _out(goal)
+    return _out(goal, clock_today(session))

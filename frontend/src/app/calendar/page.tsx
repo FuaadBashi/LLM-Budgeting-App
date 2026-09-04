@@ -7,6 +7,7 @@ import {
   getCategories,
   getObligations,
   type Category,
+  type CalendarEvent,
   type FinancialCalendar,
   type Obligation,
 } from "@/lib/api";
@@ -18,6 +19,29 @@ function shortDate(iso: string): string {
   const [, m, d] = iso.split("-");
   const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   return `${Number(d)} ${months[Number(m) - 1]}`;
+}
+
+type UpcomingEvent = CalendarEvent & { day: string; below: boolean };
+
+function CalendarRow({ event: e }: { event: UpcomingEvent }) {
+  return (
+    <li className="flex items-baseline gap-4 p-3 text-sm">
+      <span className="w-16 shrink-0 text-xs tnum" style={{ color: "var(--text-muted)" }}>
+        {shortDate(e.day)}
+      </span>
+      <span className="min-w-0 flex-1" style={{ color: "var(--text-primary)" }}>
+        {e.name}
+      </span>
+      <span
+        className="tnum"
+        style={{
+          color: e.amount_minor < 0 ? "var(--text-primary)" : "var(--success-text)",
+        }}
+      >
+        {formatSignedMinor(e.amount_minor)}
+      </span>
+    </li>
+  );
 }
 
 export default async function CalendarPage() {
@@ -39,9 +63,11 @@ export default async function CalendarPage() {
     error = e instanceof Error ? e.message : "Unknown error";
   }
 
-  const upcoming = (calendar?.days ?? [])
-    .flatMap((d) => d.events.map((e) => ({ day: d.day, below: d.below_buffer, ...e })))
-    .slice(0, 12);
+  const allUpcoming = (calendar?.days ?? []).flatMap((d) =>
+    d.events.map((e) => ({ day: d.day, below: d.below_buffer, ...e })),
+  );
+  const upcoming = allUpcoming.slice(0, 12);
+  const rest = allUpcoming.slice(12);
 
   return (
     <AppShell>
@@ -69,6 +95,35 @@ export default async function CalendarPage() {
               <section>
                 <h2 className="section-label mb-3">Projected balance</h2>
                 <div className="card p-5">
+                  {/* The question this screen exists to answer: not "a bill
+                      is due" but "this specific payment is the one that
+                      breaks it". The API has always returned the cause;
+                      only the dashboard's own summary read it. */}
+                  <p className="mb-4 text-sm" style={{ color: "var(--text-secondary)" }}>
+                    {calendar.first_breach_date ? (
+                      <>
+                        <span aria-hidden style={{ color: "var(--status-critical)" }}>✕</span>{" "}
+                        {calendar.first_breach_cause ?? "A committed payment"} on{" "}
+                        {shortDate(calendar.first_breach_date)} takes projected cash
+                        below your {formatMinor(calendar.protected_buffer_minor)} buffer.
+                      </>
+                    ) : (
+                      <>
+                        <span aria-hidden style={{ color: "var(--status-good)" }}>✓</span>{" "}
+                        Committed payments stay above your{" "}
+                        {formatMinor(calendar.protected_buffer_minor)} buffer for the
+                        next 90 days.
+                      </>
+                    )}
+                    {calendar.trough_balance_minor !== null && (
+                      <>
+                        {" "}
+                        Lowest point{" "}
+                        <span className="tnum">{formatMinor(calendar.trough_balance_minor)}</span>{" "}
+                        on {shortDate(calendar.trough_date!)}.
+                      </>
+                    )}
+                  </p>
                   <BalanceCurve
                     days={calendar.days}
                     bufferMinor={calendar.protected_buffer_minor}
@@ -85,29 +140,32 @@ export default async function CalendarPage() {
                   Nothing scheduled in the next 90 days.
                 </div>
               ) : (
-                <ul className="card divide-y" style={{ borderColor: "var(--gridline)" }}>
-                  {upcoming.map((e, i) => (
-                    <li key={`${e.day}-${i}`} className="flex items-baseline gap-4 p-3 text-sm">
-                      <span className="w-16 shrink-0 text-xs tnum" style={{ color: "var(--text-muted)" }}>
-                        {shortDate(e.day)}
-                      </span>
-                      <span className="min-w-0 flex-1" style={{ color: "var(--text-primary)" }}>
-                        {e.name}
-                      </span>
-                      <span
-                        className="tnum"
-                        style={{
-                          color:
-                            e.amount_minor < 0
-                              ? "var(--text-primary)"
-                              : "var(--success-text)",
-                        }}
+                <div className="card" style={{ borderColor: "var(--gridline)" }}>
+                  <ul className="divide-y" style={{ borderColor: "var(--gridline)" }}>
+                    {upcoming.map((e, i) => (
+                      <CalendarRow key={`${e.day}-${i}`} event={e} />
+                    ))}
+                  </ul>
+                  {/* Already fetched -- the full 90-day set was in the response
+                      the whole time, just sliced off before it reached the
+                      page. A bill in week 10 was silently dropped, not
+                      unavailable. */}
+                  {rest.length > 0 && (
+                    <details className="border-t" style={{ borderColor: "var(--gridline)" }}>
+                      <summary
+                        className="cursor-pointer p-3 text-xs"
+                        style={{ color: "var(--text-muted)" }}
                       >
-                        {formatSignedMinor(e.amount_minor)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                        Show {rest.length} more
+                      </summary>
+                      <ul className="divide-y border-t" style={{ borderColor: "var(--gridline)" }}>
+                        {rest.map((e, i) => (
+                          <CalendarRow key={`${e.day}-${i}`} event={e} />
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
               )}
             </section>
 

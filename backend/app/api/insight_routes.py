@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import to_minor
 from app.db import get_session
-from app.domain import explain, insights
+from app.domain import explain, insights, narrate
 
 router = APIRouter()
 
@@ -49,6 +49,15 @@ class InsightOut(BaseModel):
     detail: str
     action: str
     evidence: list[EvidenceOut]
+    #: What this insight is about, when it's about one specific thing --
+    #: lets the client link straight to the transactions behind it.
+    subject_merchant: str | None
+    subject_category_id: uuid.UUID | None
+    #: A friendlier rewrite of `detail`, built only from the evidence already
+    #: attached (see domain/narrate.py). None with no provider, or if the
+    #: model produced nothing usable -- `detail` is always a complete
+    #: sentence on its own and is what the client falls back to.
+    narration: str | None
 
 
 def _term(t: explain.Term) -> TermOut:
@@ -107,6 +116,18 @@ def list_insights(
     on: date | None = None, session: Session = Depends(get_session)
 ) -> list[InsightOut]:
     """Everything worth mentioning, worst first."""
+    found = insights.collect(session, on)
+
+    # One batched call for the whole page rather than one per insight -- see
+    # domain/narrate.py for why this is the one LLM feature with no cache.
+    try:
+        narrations = narrate.narrate_all(found)
+    except Exception as exc:  # noqa: BLE001 -- a narration is never critical
+        import logging
+
+        logging.getLogger("uvicorn.error").warning("narration skipped: %s", exc)
+        narrations = {}
+
     return [
         InsightOut(
             kind=i.kind,
@@ -122,6 +143,9 @@ def list_insights(
                 )
                 for e in i.evidence
             ],
+            subject_merchant=i.subject_merchant,
+            subject_category_id=i.subject_category_id,
+            narration=narrations.get(index),
         )
-        for i in insights.collect(session, on)
+        for index, i in enumerate(found)
     ]

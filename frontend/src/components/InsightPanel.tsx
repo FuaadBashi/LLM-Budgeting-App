@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { Derivation, Insight, Severity, Term } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
@@ -80,6 +81,16 @@ function InsightCard({ insight }: { insight: Insight }) {
   const [open, setOpen] = useState(false);
   const s = SEVERITY[insight.severity] ?? SEVERITY.warning;
 
+  // What this insight is about, if it's about one specific thing -- a real
+  // link to click through to, not just "check the transactions" with
+  // nowhere to go. Merchant takes priority: a category-trend insight only
+  // ever carries a category, but nothing carries both.
+  const subjectHref = insight.subject_merchant
+    ? `/transactions?q=${encodeURIComponent(insight.subject_merchant)}`
+    : insight.subject_category_id
+      ? `/transactions?category=${insight.subject_category_id}`
+      : null;
+
   return (
     <li className="card p-4" style={{ boxShadow: `inset 0 0 0 1px ${s.colour}` }}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -100,12 +111,23 @@ function InsightCard({ insight }: { insight: Insight }) {
       </div>
 
       <p className="mt-1.5 text-sm" style={{ color: "var(--text-secondary)" }}>
-        {insight.detail}
+        {/* narration is a friendlier rewrite of the same facts, built only
+            from this insight's own evidence -- detail (always a complete
+            sentence on its own) is the fallback with no provider. */}
+        {insight.narration ?? insight.detail}
       </p>
 
       {insight.action && (
         <p className="mt-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
           {insight.action}
+          {subjectHref && (
+            <>
+              {" "}
+              <Link href={subjectHref} className="underline" style={{ color: "var(--text-secondary)" }}>
+                See transactions →
+              </Link>
+            </>
+          )}
         </p>
       )}
 

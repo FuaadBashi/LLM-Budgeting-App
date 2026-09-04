@@ -262,6 +262,25 @@ function GoalCard({ goal }: { goal: Goal }) {
             <dd style={{ color: "var(--text-secondary)" }}>{goal.target_date}</dd>
           </div>
         )}
+        {/* The same "at this rate, done by when" the simulator already
+            answers for a hypothetical goal -- a real one deserves the
+            same forward-looking answer, not just a progress bar. */}
+        {goal.months_to_completion !== null ? (
+          <div className="flex gap-1.5">
+            <dt style={{ color: "var(--text-muted)" }}>Projected</dt>
+            <dd style={{ color: "var(--text-secondary)" }}>
+              {goal.months_to_completion === 0 ? "Reached" : goal.projected_completion_date}
+            </dd>
+          </div>
+        ) : (
+          goal.progress !== null &&
+          goal.progress < 1 && (
+            <div className="flex gap-1.5">
+              <dt style={{ color: "var(--text-muted)" }}>Projected</dt>
+              <dd style={{ color: "var(--status-warning)" }}>▲ No contribution planned</dd>
+            </div>
+          )
+        )}
       </dl>
     </li>
   );

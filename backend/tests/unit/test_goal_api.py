@@ -130,6 +130,41 @@ def test_contributions_accumulate(client, accounts):
     assert r.json()["attributed_balance_minor"] == 150_000
 
 
+# --------------------------------------------------------------------------
+# Projected completion date -- the same "at this rate, done by when" math
+# the simulator already runs for a hypothetical goal, applied to a real one.
+# --------------------------------------------------------------------------
+
+
+def test_projected_completion_date_uses_the_planned_contribution_rate(client, session):
+    from app.domain.clock import today as clock_today
+    from app.domain.simulation import add_months
+
+    body = make(client, target_amount_minor=100_000, planned_contribution_minor=10_000).json()
+    assert body["months_to_completion"] == 10
+    assert body["projected_completion_date"] == add_months(clock_today(session), 10).isoformat()
+
+
+def test_a_goal_with_no_contribution_has_no_projected_date(client):
+    """Nothing is being contributed, so there is no date to project."""
+    body = make(client, planned_contribution_minor=0).json()
+    assert body["months_to_completion"] is None
+    assert body["projected_completion_date"] is None
+
+
+def test_an_already_reached_goal_projects_immediately(client, session, accounts):
+    from app.domain.clock import today as clock_today
+
+    goal_id = make(
+        client, target_amount_minor=100_000, account_id=str(accounts["savings"].id)
+    ).json()["id"]
+    body = client.post(
+        f"/api/goals/{goal_id}/contributions", json={"amount_minor": 100_000}
+    ).json()
+    assert body["months_to_completion"] == 0
+    assert body["projected_completion_date"] == clock_today(session).isoformat()
+
+
 def test_a_new_goal_feeds_safe_to_spend(client, session, accounts):
     """The point of the endpoint: a goal created here must reach the engine."""
     from app.domain.disposable import compute_safe_to_spend

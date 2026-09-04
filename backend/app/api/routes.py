@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
 
@@ -245,17 +245,59 @@ def list_transactions(
     limit: int = 50,
     offset: int = 0,
     include_voided: bool = False,
+    q: str | None = None,
+    category_id: uuid.UUID | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    min_amount_minor: int | None = None,
+    max_amount_minor: int | None = None,
     session: Session = Depends(get_session),
 ) -> list[TransactionOut]:
     """Most recent first. Voided rows are hidden unless asked for.
 
     They are never deleted (invariant L3), so they stay reachable -- an audit
     trail you cannot see is not much of one.
+
+    Every filter is a real SQL WHERE, not a fetch-then-filter in Python --
+    with a 200-row page cap, filtering after the fact would silently miss
+    matches that fell outside whatever page happened to be fetched first.
+    ``category_id`` matches a transaction with *any* posting in that category
+    (a split can touch more than one); the amount range is the same
+    liquid-cash effect the row displays, not a raw posting amount, so a
+    filter of "£20 to £50" means what the screen shows for "£20 to £50".
     """
     kinds = {a.id: a.kind for a in session.scalars(select(Account))}
     query = select(Transaction)
     if not include_voided:
         query = query.where(Transaction.status != TransactionStatus.VOIDED)
+    if q:
+        pattern = f"%{q}%"
+        query = query.where(
+            or_(Transaction.description.ilike(pattern), Transaction.merchant.ilike(pattern))
+        )
+    if category_id is not None:
+        query = query.where(
+            exists().where(
+                Posting.transaction_id == Transaction.id,
+                Posting.category_id == category_id,
+            )
+        )
+    if start is not None:
+        query = query.where(Transaction.booking_date >= start)
+    if end is not None:
+        query = query.where(Transaction.booking_date <= end)
+    if min_amount_minor is not None or max_amount_minor is not None:
+        liquid_effect = (
+            select(func.coalesce(func.sum(Posting.amount), 0))
+            .join(Account, Account.id == Posting.account_id)
+            .where(Posting.transaction_id == Transaction.id, Account.kind.in_(LIQUID_KINDS))
+            .correlate(Transaction)
+            .scalar_subquery()
+        )
+        if min_amount_minor is not None:
+            query = query.where(liquid_effect >= from_minor(min_amount_minor))
+        if max_amount_minor is not None:
+            query = query.where(liquid_effect <= from_minor(max_amount_minor))
     rows = session.scalars(
         query.order_by(
             Transaction.booking_date.desc(), Transaction.created_at.desc()

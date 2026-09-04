@@ -1,12 +1,16 @@
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { requireSession } from "@/lib/guard";
+import { AllocationCard } from "@/components/AllocationCard";
 import { CategoryBars } from "@/components/CategoryBars";
 import { MonthlyBars } from "@/components/MonthlyBars";
 import { StatTile } from "@/components/StatTile";
 import {
   API_BASE,
+  getAllocation,
   getMonthly,
   getPeriodSummary,
+  type AllocationReport,
   type PeriodSummary,
 } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
@@ -20,16 +24,30 @@ function monthName(iso: string): string {
   return `${months[Number(m) - 1]} ${y}`;
 }
 
-export default async function AnalyticsPage() {
+export default async function AnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ start?: string; end?: string }>;
+}) {
   const gate = await requireSession();
   if (gate) return gate;
 
+  const params = await searchParams;
+  const start = params.start || undefined;
+  const end = params.end || undefined;
+  const customRange = Boolean(start || end);
+
   let period: PeriodSummary | null = null;
   let months: PeriodSummary[] = [];
+  let allocation: AllocationReport | null = null;
   let error: string | null = null;
 
   try {
-    [period, months] = await Promise.all([getPeriodSummary(), getMonthly()]);
+    [period, months, allocation] = await Promise.all([
+      getPeriodSummary(start, end),
+      getMonthly(),
+      getAllocation(start, end),
+    ]);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
   }
@@ -55,16 +73,47 @@ export default async function AnalyticsPage() {
   return (
     <AppShell>
       <main className="mx-auto max-w-5xl space-y-8 px-4 py-6 sm:px-6 lg:py-10">
-        <header>
-          <h1
-            className="font-display text-xl sm:text-2xl"
-            style={{ color: "var(--text-primary)" }}
-          >
-            Analytics
-          </h1>
-          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-            {monthName(period.start)}
-          </p>
+        <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1
+              className="font-display text-xl sm:text-2xl"
+              style={{ color: "var(--text-primary)" }}
+            >
+              Analytics
+            </h1>
+            <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+              {customRange ? `${period.start} to ${period.end}` : monthName(period.start)}
+            </p>
+          </div>
+
+          {/* A GET form, not a client component -- the two field names match
+              the search-params the page already reads. */}
+          <form method="GET" className="flex flex-wrap items-end gap-2">
+            <label className="block text-xs" style={{ color: "var(--text-muted)" }}>
+              <span className="mb-1 block">From</span>
+              <input type="date" name="start" defaultValue={start} className="form-control" />
+            </label>
+            <label className="block text-xs" style={{ color: "var(--text-muted)" }}>
+              <span className="mb-1 block">To</span>
+              <input type="date" name="end" defaultValue={end} className="form-control" />
+            </label>
+            {customRange && (
+              <Link
+                href="/analytics"
+                className="rounded-full px-3 py-2.5 text-xs"
+                style={{ color: "var(--text-muted)" }}
+              >
+                This month
+              </Link>
+            )}
+            <button
+              type="submit"
+              className="rounded-full px-4 py-2.5 text-sm font-medium"
+              style={{ background: "var(--accent)", color: "#fff" }}
+            >
+              Apply
+            </button>
+          </form>
         </header>
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -172,7 +221,7 @@ export default async function AnalyticsPage() {
           <div>
             <h2 className="section-label mb-3">Spending by category</h2>
             <div className="card p-5">
-              <CategoryBars categories={period.by_category} />
+              <CategoryBars categories={period.by_category} start={period.start} end={period.end} />
             </div>
           </div>
 
@@ -199,6 +248,15 @@ export default async function AnalyticsPage() {
             </div>
           </div>
         </section>
+
+        {allocation && (
+          <section>
+            <h2 className="section-label mb-3">Needs, wants and savings (50/30/20)</h2>
+            <div className="card p-5">
+              <AllocationCard report={allocation} />
+            </div>
+          </section>
+        )}
 
         <section>
           <h2 className="section-label mb-3">Export</h2>

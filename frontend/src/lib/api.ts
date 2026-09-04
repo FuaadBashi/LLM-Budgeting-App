@@ -163,6 +163,8 @@ export interface Recovery {
 }
 
 export interface CategoryTotal {
+  /** Null for the "Uncategorised" row -- there is no category to link to. */
+  category_id: string | null;
   name: string;
   amount_minor: Minor;
 }
@@ -182,6 +184,34 @@ export interface PeriodSummary {
   by_merchant: [string, Minor][];
 }
 
+export interface AllocationBucket {
+  key: string;
+  label: string;
+  amount_minor: Minor;
+  /** None when there was no income -- not zero, a different statement. */
+  share: number | null;
+  /** None for "uncategorised", which the 50/30/20 rule has no target for. */
+  target_share: number | null;
+  target_amount_minor: Minor | null;
+  /** Actual minus target, so positive is above target. */
+  variance_amount_minor: Minor | null;
+  variance_share: number | null;
+}
+
+export interface AllocationReport {
+  start: string;
+  end: string;
+  income_minor: Minor;
+  needs: AllocationBucket;
+  wants: AllocationBucket;
+  savings: AllocationBucket;
+  uncategorised: AllocationBucket;
+  set_aside_minor: Minor;
+  debt_principal_minor: Minor;
+  total_outflow_minor: Minor;
+  unallocated_minor: Minor;
+}
+
 export interface Goal {
   id: string;
   name: string;
@@ -196,6 +226,10 @@ export interface Goal {
   account_id: string | null;
   active: boolean;
   progress: number | null;
+  /** Months to reach the target at the current planned contribution, or
+   *  null if nothing is being contributed and it never will. */
+  months_to_completion: number | null;
+  projected_completion_date: string | null;
 }
 
 export interface BudgetSummary {
@@ -499,6 +533,11 @@ export interface Insight {
   detail: string;
   action: string;
   evidence: Evidence[];
+  /** What this insight is about, when it's about one specific thing. */
+  subject_merchant: string | null;
+  subject_category_id: string | null;
+  /** A friendlier rewrite of `detail`, or null with no provider configured. */
+  narration: string | null;
 }
 
 export interface BackupFile {
@@ -657,10 +696,40 @@ export const getMonthly = (first?: string, last?: string) =>
   get<PeriodSummary[]>(
     first && last ? `/analytics/monthly?first=${first}&last=${last}` : "/analytics/monthly",
   );
-export const getTransactions = (limit = 100, includeVoided = false) =>
-  get<Transaction[]>(
-    `/transactions?limit=${limit}&include_voided=${includeVoided}`,
+export const getAllocation = (start?: string, end?: string) =>
+  get<AllocationReport>(
+    start && end ? `/analytics/allocation?start=${start}&end=${end}` : "/analytics/allocation",
   );
+export interface TransactionFilters {
+  q?: string;
+  categoryId?: string;
+  start?: string;
+  end?: string;
+  minAmountMinor?: number;
+  maxAmountMinor?: number;
+}
+
+export const getTransactions = (
+  limit = 100,
+  includeVoided = false,
+  filters: TransactionFilters = {},
+) => {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    include_voided: String(includeVoided),
+  });
+  if (filters.q) params.set("q", filters.q);
+  if (filters.categoryId) params.set("category_id", filters.categoryId);
+  if (filters.start) params.set("start", filters.start);
+  if (filters.end) params.set("end", filters.end);
+  if (filters.minAmountMinor !== undefined) {
+    params.set("min_amount_minor", String(filters.minAmountMinor));
+  }
+  if (filters.maxAmountMinor !== undefined) {
+    params.set("max_amount_minor", String(filters.maxAmountMinor));
+  }
+  return get<Transaction[]>(`/transactions?${params.toString()}`);
+};
 
 export async function voidTransaction(id: string): Promise<Transaction> {
   const res = await fetch(`${BASE}/transactions/${id}/void`, {

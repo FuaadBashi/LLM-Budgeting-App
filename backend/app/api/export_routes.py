@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import uuid
 from datetime import date
 from decimal import Decimal
 
@@ -34,6 +35,8 @@ router = APIRouter()
 
 
 class CategoryTotalOut(BaseModel):
+    #: None for the "Uncategorised" row -- there is no category to link to.
+    category_id: uuid.UUID | None
     name: str
     amount_minor: int
 
@@ -64,7 +67,9 @@ def _summary_out(s: analytics.PeriodSummary) -> PeriodSummaryOut:
         savings_rate=float(s.savings_rate) if s.savings_rate is not None else None,
         set_aside_rate=float(s.set_aside_rate) if s.set_aside_rate is not None else None,
         by_category=[
-            CategoryTotalOut(name=c.name, amount_minor=to_minor(c.amount))
+            CategoryTotalOut(
+                category_id=c.category_id, name=c.name, amount_minor=to_minor(c.amount)
+            )
             for c in s.by_category
         ],
         by_merchant=[(name, to_minor(total)) for name, total in s.by_merchant],
