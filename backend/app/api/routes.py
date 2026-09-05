@@ -41,6 +41,7 @@ from app.domain.disposable import account_balances, compute_safe_to_spend, net_w
 from app.models import (
     Account,
     Category,
+    ObligationInstance,
     Posting,
     Transaction,
     TransactionStatus,
@@ -358,6 +359,18 @@ def void_transaction(
         raise HTTPException(status_code=422, detail="transaction is already voided")
 
     txn.status = TransactionStatus.VOIDED
+    # A void says the transaction never happened. Any obligation link pointing
+    # at it must be reopened in the same commit or forecasts keep treating a
+    # non-existent payment as fulfilment. This is lifecycle repair, not an
+    # automatic-match rejection, so another valid transaction may still match.
+    for instance in session.scalars(
+        select(ObligationInstance).where(
+            ObligationInstance.fulfilled_by_transaction_id == txn.id
+        )
+    ):
+        instance.fulfilled_by_transaction_id = None
+        instance.match_confirmed = False
+        instance.auto_match_disabled = False
     try:
         session.commit()
     except DatabaseError as exc:

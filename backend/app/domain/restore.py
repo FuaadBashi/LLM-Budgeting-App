@@ -210,9 +210,14 @@ def _apply_v2(session: Session, payload: dict) -> RestoreResult:
         table = Base.metadata.tables[name]
         rows = []
         for encoded in tables[name]:
+            # Omit columns an older v2 file did not know about, so a newly added
+            # column receives its database default. Turning an absent field into
+            # explicit NULL breaks every old backup the first time a NOT NULL
+            # column is added, precisely when restore compatibility matters.
             row = {
-                column.name: _decoded(column, encoded.get(column.name))
+                column.name: _decoded(column, encoded[column.name])
                 for column in table.columns
+                if column.name in encoded
             }
             for field in deferred.get(name, ()):
                 row[field] = None

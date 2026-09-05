@@ -77,21 +77,23 @@ def test_sync_matches_a_paid_obligation(client, session, accounts):
     body = client.post("/api/obligations/sync").json()
     assert body["matched"] == 1
 
-    # A machine-suggested link remains outstanding until a person confirms it.
+    # The link is what O1 acts on, so the instance is fulfilled the moment the
+    # matcher makes it. It stays on the review worklist because nobody has
+    # accepted the guess yet -- a worklist, not a forecast term.
     pending = client.get("/api/obligations/instances").json()
     assert len(pending) == 1
-    assert pending[0]["fulfilled"] is False
+    assert pending[0]["fulfilled"] is True
     assert pending[0]["match_confirmed"] is False
     every = client.get("/api/obligations/instances?include_fulfilled=true").json()
     assert len(every) == 1
-    assert every[0]["fulfilled"] is False
-    assert every[0]["match_confirmed"] is False
+    assert every[0]["fulfilled"] is True
 
 
-def test_confirming_a_match_moves_it_out_of_the_outstanding_forecast(
+def test_confirming_a_match_clears_the_worklist_and_moves_no_figure(
     client, session, accounts
 ):
-    """A suggested match cannot alter a financial figure until it is accepted."""
+    """Confirmation records that a person looked. The money moved when the
+    payment was linked, so no figure may change on the click."""
     make(client, first_due_date="2026-08-10", frequency=None, amount_minor=60000)
     post(
         session,
@@ -102,22 +104,29 @@ def test_confirming_a_match_moves_it_out_of_the_outstanding_forecast(
     client.post("/api/obligations/sync")
 
     inst = client.get("/api/obligations/instances?include_fulfilled=true").json()[0]
-    assert inst["fulfilled"] is False
+    assert inst["fulfilled"] is True
     assert inst["fulfilled_by_transaction_id"] is not None
     assert inst["match_confirmed"] is False
+
+    window = (date(2026, 8, 10), date(2026, 8, 20))
+    before = near_term_committed(session, *window)
 
     confirmed = client.post(f"/api/obligations/instances/{inst['id']}/confirm").json()
     assert confirmed["match_confirmed"] is True
     assert confirmed["fulfilled"] is True
     assert confirmed["fulfilled_by_transaction_id"] == inst["fulfilled_by_transaction_id"]
     assert confirmed["amount_minor"] == inst["amount_minor"]
+    assert near_term_committed(session, *window) == before
+
+    # Confirmed, so there is nothing left to review.
     assert client.get("/api/obligations/instances").json() == []
 
 
-def test_an_unconfirmed_match_cannot_inflate_safe_to_spend(
+def test_a_paid_obligation_leaves_committed_whether_or_not_it_is_confirmed(
     session, accounts
 ):
-    """The dangerous error is dropping a real bill because a guess was wrong."""
+    """Invariant O1: committed to spent in one step, never both at once. The
+    cash has already gone, so reserving it again understates safe-to-spend."""
     ob = FutureObligation(
         name="Rent",
         amount=Decimal("600"),
@@ -141,7 +150,7 @@ def test_an_unconfirmed_match_cannot_inflate_safe_to_spend(
     assert inst.match_confirmed is False
     assert near_term_committed(
         session, date(2026, 8, 10), date(2026, 8, 20)
-    ) == Decimal("600")
+    ) == Decimal("0")
 
     inst.match_confirmed = True
     session.commit()
@@ -150,11 +159,12 @@ def test_an_unconfirmed_match_cannot_inflate_safe_to_spend(
     ) == Decimal("0")
 
 
-def test_unconfirmed_projection_is_conservative_without_extrapolating_the_bill(
+def test_projected_spend_is_the_same_whether_or_not_a_match_is_confirmed(
     session, accounts
 ):
-    """Keep the possibly-unpaid bill, but never turn its linked payment into a
-    recurring daily run rate while it waits for review."""
+    """The measured regression: this returned 1350 with the bill in the run
+    rate, then 1200 with it merely reserved, against a true 600. The same rent
+    was in Spent, in the extrapolation and in committed at once."""
     september = Period(date(2026, 9, 1), date(2026, 9, 30))
     ob = FutureObligation(
         name="Rent",
@@ -194,12 +204,11 @@ def test_unconfirmed_projection_is_conservative_without_extrapolating_the_bill(
     session.commit()
     confirmed = projected()
 
-    assert unconfirmed.projected_spend == Decimal("1200")
+    assert unconfirmed.projected_spend == confirmed.projected_spend
+    assert unconfirmed.projected_spend == Decimal("600")
     assert unconfirmed.run_rate == Decimal("0")
     assert unconfirmed.obligation_linked == Decimal("600")
-    assert unconfirmed.committed_remaining == Decimal("600")
-    assert confirmed.projected_spend == Decimal("600")
-    assert confirmed.committed_remaining == Decimal("0")
+    assert unconfirmed.committed_remaining == Decimal("0")
 
 
 def test_a_declared_category_prevents_same_amount_wrong_bill_match(
@@ -242,6 +251,93 @@ def test_a_declared_category_prevents_same_amount_wrong_bill_match(
     assert inst.fulfilled_by_transaction_id != wrong.id
 
 
+def test_an_ambiguous_same_amount_pair_is_not_auto_matched(session, accounts):
+    """A database sort order is not evidence that one of two payments is rent."""
+    ob = FutureObligation(
+        name="Rent", amount=Decimal("100"), first_due_date=date(2026, 8, 10)
+    )
+    inst = ObligationInstance(
+        obligation=ob, due_date=date(2026, 8, 10), amount=Decimal("100")
+    )
+    session.add_all([ob, inst])
+    session.commit()
+    for description, when in (
+        ("Purchase A", date(2026, 8, 9)),
+        ("Purchase B", date(2026, 8, 10)),
+    ):
+        post(
+            session,
+            when,
+            description,
+            [(accounts["current"], "-100"), (accounts["groceries"], "100")],
+        )
+
+    assert match_instances(session, date(2026, 8, 10)).matched == 0
+    session.refresh(inst)
+    assert inst.fulfilled_by_transaction_id is None
+
+
+def test_unmatching_restores_the_commitment_and_survives_sync(
+    client, session, accounts, monkeypatch
+):
+    """A reject action that the next sync reverses is not a real reject action."""
+    monkeypatch.setattr(
+        "app.api.obligation_routes.clock_today", lambda _session: date(2026, 8, 10)
+    )
+    make(client, first_due_date="2026-08-10", frequency=None, amount_minor=60000)
+    post(
+        session,
+        date(2026, 8, 10),
+        "Not rent",
+        [(accounts["current"], "-600"), (accounts["groceries"], "600")],
+    )
+    client.post("/api/obligations/sync")
+    inst = client.get("/api/obligations/instances").json()[0]
+    assert near_term_committed(
+        session, date(2026, 8, 10), date(2026, 8, 20)
+    ) == Decimal("0")
+
+    rejected = client.post(
+        f"/api/obligations/instances/{inst['id']}/unmatch"
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["fulfilled"] is False
+    assert near_term_committed(
+        session, date(2026, 8, 10), date(2026, 8, 20)
+    ) == Decimal("600")
+
+    assert client.post("/api/obligations/sync").json()["matched"] == 0
+    after = client.get(
+        "/api/obligations/instances?include_fulfilled=true"
+    ).json()[0]
+    assert after["fulfilled_by_transaction_id"] is None
+
+
+def test_voiding_a_matched_payment_reopens_the_commitment(
+    client, session, accounts, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.obligation_routes.clock_today", lambda _session: date(2026, 8, 10)
+    )
+    make(client, first_due_date="2026-08-10", frequency=None, amount_minor=60000)
+    txn = post(
+        session,
+        date(2026, 8, 10),
+        "Rent",
+        [(accounts["current"], "-600"), (accounts["groceries"], "600")],
+    )
+    client.post("/api/obligations/sync")
+
+    assert client.post(f"/api/transactions/{txn.id}/void").status_code == 200
+    inst = client.get(
+        "/api/obligations/instances?include_fulfilled=true"
+    ).json()[0]
+    assert inst["fulfilled_by_transaction_id"] is None
+    assert near_term_committed(
+        session, date(2026, 8, 10), date(2026, 8, 20)
+    ) == Decimal("600")
+
+
 def test_confirming_an_unmatched_instance_is_rejected(client):
     make(client, frequency=None)
     inst = client.get("/api/obligations/instances").json()[0]
@@ -261,19 +357,46 @@ def instances_of(client, obligation_id):
     ]
 
 
-def test_changing_the_amount_rewrites_unfulfilled_instances(client):
-    """Instances carry a copy of the amount rather than reading through.
-
-    Without the rewrite a rent rise leaves every projected instance at the old
-    figure while the obligation shows the new one -- two numbers for one bill.
-    """
+def test_changing_the_amount_rewrites_only_current_and_future_instances(
+    client, monkeypatch
+):
+    """A series edit must not restate what an old occurrence was expected to cost."""
+    monkeypatch.setattr(
+        "app.api.obligation_routes.clock_today", lambda _session: date(2026, 9, 15)
+    )
     ob_id = make(client).json()["id"]
     assert {i["amount_minor"] for i in instances_of(client, ob_id)} == {120000}
 
     r = client.patch(f"/api/obligations/{ob_id}", json={"amount_minor": 130000})
     assert r.status_code == 200
     assert r.json()["amount_minor"] == 130000
-    assert {i["amount_minor"] for i in instances_of(client, ob_id)} == {130000}
+    amounts = {i["due_date"]: i["amount_minor"] for i in instances_of(client, ob_id)}
+    assert amounts["2026-08-31"] == 120000
+    assert amounts["2026-09-30"] == 130000
+
+
+def test_shortening_and_clearing_the_end_date_reshapes_only_the_future_schedule(
+    client, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.obligation_routes.clock_today", lambda _session: date(2026, 9, 15)
+    )
+    ob_id = make(client).json()["id"]
+
+    shortened = client.patch(
+        f"/api/obligations/{ob_id}", json={"end_date": "2026-10-31"}
+    )
+    assert shortened.status_code == 200
+    assert shortened.json()["end_date"] == "2026-10-31"
+    dates = [i["due_date"] for i in instances_of(client, ob_id)]
+    assert dates == ["2026-08-31", "2026-09-30", "2026-10-31"]
+
+    reopened = client.patch(
+        f"/api/obligations/{ob_id}", json={"end_date": None}
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["end_date"] is None
+    assert "2026-11-30" in [i["due_date"] for i in instances_of(client, ob_id)]
 
 
 def test_fulfilled_instances_keep_their_original_amount(client, session, accounts):

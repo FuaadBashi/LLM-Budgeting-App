@@ -7,6 +7,7 @@ real history: an export nobody has restored is a file, not a backup.
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import date
 from decimal import Decimal
 
@@ -15,7 +16,13 @@ from fastapi.testclient import TestClient
 
 from app.db import get_session
 from app.domain.disposable import account_balances, net_worth
-from app.domain.restore import RestoreError, restore, validate
+from app.domain.restore import (
+    LEGACY_VERSION,
+    SUPPORTED_FORMAT,
+    RestoreError,
+    restore,
+    validate,
+)
 from app.main import app
 from app.domain import backup as backup_module
 from app.models import ImportBatch, Scenario, Transaction
@@ -220,3 +227,93 @@ def test_restore_endpoint_round_trips(client, session, populated, accounts):
 def test_restore_endpoint_rejects_a_bad_file_with_422(client, session, populated):
     r = client.post("/api/restore?replace=true", json={"format": "nope"})
     assert r.status_code == 422
+
+
+# --------------------------------------------------------------------------
+# The version 1 files already on disk
+# --------------------------------------------------------------------------
+
+
+def test_a_version_1_backup_still_restores(session):
+    """Every backup written before the v2 table format is still a v1 file.
+
+    The legacy branch is what reads them, and it is the disaster-recovery path:
+    if it breaks, the failure surfaces on the one day it must not. Built by hand
+    rather than by exporting, because the exporter now only writes v2 and a
+    test that generates its own input would stop covering the old shape the
+    moment the writer changed.
+    """
+    current, groceries, food = (str(uuid.uuid4()) for _ in range(3))
+    payload = {
+        "format": SUPPORTED_FORMAT,
+        "version": LEGACY_VERSION,
+        "accounts": [
+            {
+                "id": current,
+                "name": "Current",
+                "kind": "current",
+                "opening_balance": "1000.00",
+                "active": True,
+            },
+            {
+                "id": groceries,
+                "name": "Groceries",
+                "kind": "expense",
+                "opening_balance": "0.00",
+                "active": True,
+            },
+        ],
+        "categories": [{"id": food, "name": "Food", "nature": "discretionary"}],
+        "transactions": [
+            {
+                "id": str(uuid.uuid4()),
+                "booking_date": "2026-08-10",
+                "occurred_at": "2026-08-10T12:00:00",
+                "description": "Shop",
+                "status": "posted",
+                "source": "restore",
+                "postings": [
+                    {
+                        "id": str(uuid.uuid4()),
+                        "account_id": current,
+                        "amount": "-25.00",
+                    },
+                    {
+                        "id": str(uuid.uuid4()),
+                        "account_id": groceries,
+                        "category_id": food,
+                        "amount": "25.00",
+                    },
+                ],
+            }
+        ],
+    }
+
+    result = restore(session, payload)
+
+    assert (result.accounts, result.categories, result.transactions) == (2, 1, 1)
+    balances = {str(k): v for k, v in account_balances(session).items()}
+    assert balances[current] == Decimal("975.0000")
+    assert balances[groceries] == Decimal("25.0000")
+
+
+def test_a_version_1_file_will_not_replace_planning_data(session, populated):
+    """It carries ledger rows only, so replacing with it would silently drop
+    every budget, goal and commitment the database holds."""
+    session.add(
+        Scenario(name="What if", baseline_date=date(2026, 8, 1), horizon_months=12)
+    )
+    session.commit()
+
+    with pytest.raises(RestoreError, match="version 1"):
+        restore(
+            session,
+            {
+                "format": SUPPORTED_FORMAT,
+                "version": LEGACY_VERSION,
+                "accounts": [],
+                "categories": [],
+                "transactions": [],
+            },
+            replace=True,
+        )

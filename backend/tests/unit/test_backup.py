@@ -14,12 +14,13 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.db import get_session
 from app.domain import backup, restore as restore_module
 from app.domain.disposable import account_balances, net_worth
 from app.main import app
-from app.models import Base
+from app.models import Base, FutureObligation, ObligationInstance
 from tests.conftest import post
 
 NOW = datetime(2026, 8, 31, 14, 25, 30, tzinfo=timezone.utc)
@@ -81,6 +82,32 @@ def test_a_backup_file_restores(session, ledger, tmp_path, accounts):
 
     assert account_balances(session, date(2026, 8, 31)) == balances_before
     assert net_worth(session, date(2026, 8, 31)) == worth_before
+
+
+def test_an_older_v2_backup_uses_defaults_for_columns_it_did_not_have(
+    session, ledger
+):
+    """Adding a NOT NULL column must not invalidate yesterday's backup."""
+    obligation = FutureObligation(
+        name="Rent", amount=Decimal("600"), first_due_date=date(2026, 9, 1)
+    )
+    instance = ObligationInstance(
+        obligation=obligation,
+        due_date=date(2026, 9, 1),
+        amount=Decimal("600"),
+    )
+    session.add_all([obligation, instance])
+    session.commit()
+
+    payload = backup.build_payload(session)
+    for row in payload["tables"]["obligation_instances"]:
+        row.pop("auto_match_disabled")
+
+    restore_module.restore(session, payload, replace=True)
+    session.expunge_all()
+
+    restored = session.scalars(select(ObligationInstance)).one()
+    assert restored.auto_match_disabled is False
 
 
 # --------------------------------------------------------------------------

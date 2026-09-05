@@ -117,7 +117,7 @@ def test_an_already_paid_obligation_is_not_subtracted_a_second_time(
     A payment booked before ``today`` is inside the opening balance, not inside
     :func:`_future_posted`, so the money is on the curve without an event to show
     for it. Emitting the obligation as well drops the whole horizon by a second
-    600 and can invent a buffer breach. A confirmed link is the gate.
+    600 and can invent a buffer breach. The link is the gate, not the review.
     """
     ob = add_obligation(session, "Rent", "600", date(2026, 9, 2))
     session.refresh(ob)
@@ -128,10 +128,11 @@ def test_an_already_paid_obligation_is_not_subtracted_a_second_time(
         "Rent",
         [(accounts["current"], "-600"), (accounts["groceries"], "600")],
     )
+    # Left unconfirmed on purpose: this is the state every match starts in, and
+    # the one that drew a phantom -600 on the curve.
     instance.fulfilled_by_transaction_id = txn.id
-    instance.match_confirmed = True
     session.commit()
-    assert instance.match_confirmed is True
+    assert instance.match_confirmed is False
 
     c = cal.build(session, TODAY, date(2026, 9, 5))
     assert c.opening_balance == Decimal("450")  # charged once, in the ledger

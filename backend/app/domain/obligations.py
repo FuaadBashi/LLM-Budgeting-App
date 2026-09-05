@@ -13,6 +13,7 @@ matching writes only the fulfilment link.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -137,11 +138,15 @@ class MatchResult:
 def match_instances(session: Session, today: date) -> MatchResult:
     """Link unfulfilled instances to transactions that appear to have paid them.
 
-    A link is evidence, not authority: ``match_confirmed`` stays False until a
-    person accepts it, and forecasts keep reserving the commitment meanwhile.
-    Matching is still deliberately strict -- exact amount, a nearby booking
-    date, and the declared category/funding account when present -- so the
-    review queue contains plausible comparisons rather than guesses.
+    The link prevents a posted payment and its planned bill being counted twice,
+    so false positives are more dangerous than false negatives. Exact amount,
+    nearby date and any declared category/funding account are all required. If
+    more than one transaction qualifies, or one transaction could satisfy more
+    than one occurrence, none is selected: choosing the first row would turn
+    database ordering into a financial decision.
+
+    ``match_confirmed`` records review; ``auto_match_disabled`` remembers an
+    explicit unmatch so a later sync cannot immediately recreate it.
 
     A transaction can satisfy at most one instance. Without that guard a single
     £600 payment would clear both September's and October's rent whenever the two
@@ -155,13 +160,15 @@ def match_instances(session: Session, today: date) -> MatchResult:
         )
     )
 
-    matched = 0
     unfulfilled = session.scalars(
         select(ObligationInstance)
         .where(ObligationInstance.fulfilled_by_transaction_id.is_(None))
+        .where(ObligationInstance.auto_match_disabled.is_(False))
         .order_by(ObligationInstance.due_date)
     ).all()
 
+    proposals: list[tuple[ObligationInstance, list[Transaction]]] = []
+    candidate_uses: dict[uuid.UUID, int] = {}
     for instance in unfulfilled:
         obligation = session.get(FutureObligation, instance.obligation_id)
         if obligation is None:
@@ -177,16 +184,24 @@ def match_instances(session: Session, today: date) -> MatchResult:
             .order_by(Transaction.booking_date)
         ).all()
 
-        for txn in candidates:
-            if txn.id in claimed:
-                continue
-            if not _matches_obligation(session, txn, obligation, instance.amount):
-                continue
-            instance.fulfilled_by_transaction_id = txn.id
-            instance.match_confirmed = False
-            claimed.add(txn.id)
-            matched += 1
-            break
+        eligible = [
+            txn
+            for txn in candidates
+            if txn.id not in claimed
+            and _matches_obligation(session, txn, obligation, instance.amount)
+        ]
+        proposals.append((instance, eligible))
+        for txn in eligible:
+            candidate_uses[txn.id] = candidate_uses.get(txn.id, 0) + 1
+
+    matched = 0
+    for instance, eligible in proposals:
+        if len(eligible) != 1 or candidate_uses[eligible[0].id] != 1:
+            continue
+        txn = eligible[0]
+        instance.fulfilled_by_transaction_id = txn.id
+        instance.match_confirmed = False
+        matched += 1
 
     session.commit()
     return MatchResult(matched=matched)

@@ -22,7 +22,7 @@ it is the contract, and where code disagrees with it that is a defect, not a var
 | 10 | Polish, backups, hosting | ◐ backups and exposure hardening done; the deploy itself is yours |
 | 11 | Assisted categorisation (LLM) | ✅ |
 
-**Phases 0–9 and 11 complete; Phase 10's backup half is done.** 701 tests. Deployment is the
+**Phases 0–9 and 11 complete; Phase 10's backup half is done.** 824 tests. Deployment is the
 only substantial thing left from the original plan, and `docs/RUNNING.md` already describes the
 setup worth having (Tailscale, real certificates, nothing exposed to the internet) — but see
 "Recommended next task" below, which is not that.
@@ -70,6 +70,8 @@ live; routes only translate to and from integer minor units.
 | `domain/budget_recovery.py` | Cash headroom, goal sacrifice ordering |
 | `domain/recurrence.py` | RRULE building and expansion |
 | `domain/obligations.py` | Instance generation and transaction matching |
+| `domain/obligation_scope.py` | When an instance still counts: the one predicate every forecast reads (O1) |
+| `domain/ledger_scope.py` | `posted_transaction_ids` — the transaction set every ledger engine reads (X3) |
 | `domain/calendar.py` | Projected balance curve |
 | `domain/income.py` | Expected income occurrences, derived from the rule |
 | `domain/reimbursement.py` | Netting repayments out of budget spend, by day and by merchant |
@@ -200,6 +202,10 @@ calendar, simulation. `BUDGET_ENGINE_SPEC.md` §4 lists ten contradiction points
 | X21 | The merchant baseline reads the same postings `Spent` does, netted the same way | ✅ Shared `_legs_in_scope` selector for scope; shared `reimbursement._offsets` walk for netting. `test_merchant_anomaly.py::test_the_baseline_reads_the_same_postings_budget_spent_does` and `::test_a_fully_reimbursed_trip_does_not_trip_the_merchant_warning` |
 | X22 | An account default is stamped on the write, never derived on the read | ✅ `test_account_defaults.py` — changing a default leaves written postings alone, and a restore reproduces the file |
 | X23 | A category the second opinion rejects is never cached as an answer, and is surfaced on the candidate, not just silently blanked | ✅ `test_enrichment.py::test_a_downgraded_pick_is_not_cached_at_all`, `::test_a_downgraded_merchant_is_asked_about_again_next_time`; `test_receipts.py::test_a_second_check_that_disagrees_is_surfaced_not_applied` |
+| X24 | Safe-to-spend, the balance curve and the projection release an obligation on the same event | ✅ `test_cross_engine_guards.py::test_X24_every_forecast_engine_drops_an_obligation_on_the_same_event`, plus `test_obligation_api.py::test_projected_spend_is_the_same_whether_or_not_a_match_is_confirmed` |
+| X25 | An automatic obligation match is unambiguous and reversible | ✅ `test_obligation_api.py::test_an_ambiguous_same_amount_pair_is_not_auto_matched`, `::test_unmatching_restores_the_commitment_and_survives_sync` |
+| X26 | Voiding a matched payment reopens the obligation atomically | ✅ `test_obligation_api.py::test_voiding_a_matched_payment_reopens_the_commitment`; migration 0011 repairs old voided links |
+| X27 | Recurring-rule edits change the future, never historical occurrences | ✅ `test_obligation_api.py::test_changing_the_amount_rewrites_only_current_and_future_instances`, `::test_shortening_and_clearing_the_end_date_reshapes_only_the_future_schedule` |
 
 ### Assisted categorisation and receipt reading (Phases 7 and 11)
 

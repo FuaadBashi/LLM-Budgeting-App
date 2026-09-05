@@ -242,10 +242,16 @@ class ObligationInstance(TimestampedUUID, Base):
     fulfilled_by_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("transactions.id"), nullable=True
     )
-    # Auto-matches stay unconfirmed until the user accepts them. A wrong match
-    # must not remove a real commitment from the forecast.
+    # Auto-matches stay reviewable even though the link already prevents the
+    # actual payment and planned occurrence being counted twice.
     match_confirmed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
+    )
+    # A person who explicitly unmatches a suggestion has supplied stronger
+    # evidence than the automatic matcher. Remember that decision so the next
+    # sync cannot recreate the same bad state and ask the same question again.
+    auto_match_disabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
 
     obligation: Mapped[FutureObligation] = relationship(back_populates="instances")
@@ -256,7 +262,13 @@ class ObligationInstance(TimestampedUUID, Base):
 
     @property
     def fulfilled(self) -> bool:
-        return self.fulfilled_by_transaction_id is not None and self.match_confirmed
+        """A payment is linked, so O1 has taken this out of the forecasts.
+
+        Deliberately not ``and match_confirmed``: confirmation is a review
+        flag that gates no figure, so folding it in here would make this
+        property disagree with every engine that reads the link.
+        """
+        return self.fulfilled_by_transaction_id is not None
 
 
 class ExpectedIncome(TimestampedUUID, Base):

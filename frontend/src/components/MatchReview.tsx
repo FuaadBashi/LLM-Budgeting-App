@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   confirmObligationMatch,
+  unmatchObligationMatch,
   type ObligationInstance,
   type Transaction,
 } from "@/lib/api";
@@ -39,9 +40,9 @@ function gapLabel(days: number): string {
  * Suggested matches waiting on a person.
  *
  * The matcher links a commitment to a payment on an exact amount and a booking
- * date within a few days, and that link stays a *suggestion* until confirmed
- * here — confirming a wrong one would drop a real bill out of the forecast and
- * overstate safe to spend. So the row shows both sides of the comparison:
+ * date within a few days. The link prevents the posted payment and planned bill
+ * being counted twice, but remains reversible: a wrong association must restore
+ * the bill to every forecast. So the row shows both sides of the comparison:
  * which bill, which payment, the amounts, the dates and the gap between them.
  * Confirming without those on screen would be a rubber stamp.
  */
@@ -54,28 +55,32 @@ export function MatchReview({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
-  const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
+  const [resolved, setResolved] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   const pending = instances.filter(
     (i) =>
       i.fulfilled_by_transaction_id !== null &&
       !i.match_confirmed &&
-      !confirmed.has(i.id),
+      !resolved.has(i.id),
   );
 
-  async function onConfirm(instance: ObligationInstance) {
+  async function onResolve(instance: ObligationInstance, accept: boolean) {
     setError(null);
     setBusy(instance.id);
     try {
-      await confirmObligationMatch(instance.id);
-      // Drop the row now rather than waiting for the refresh: the server
-      // re-render also has to recompute the calendar and safe to spend, and a
-      // row that lingers invites a second click on the same match.
-      setConfirmed((prior) => new Set(prior).add(instance.id));
+      if (accept) {
+        await confirmObligationMatch(instance.id);
+      } else {
+        await unmatchObligationMatch(instance.id);
+      }
+      // Drop the row now rather than waiting for the refresh. An unmatch also
+      // recomputes the forecasts, and either action lingering invites a second
+      // click on a match the server has already resolved.
+      setResolved((prior) => new Set(prior).add(instance.id));
       router.refresh();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not confirm.");
+      setError(reason instanceof Error ? reason.message : "Could not update match.");
     } finally {
       setBusy(null);
     }
@@ -183,16 +188,30 @@ export function MatchReview({
                   </p>
                 )}
 
-                <div className="flex justify-end">
+                <div className="flex flex-wrap justify-end gap-2">
                   <button
                     type="button"
-                    disabled={busy === instance.id || !txn}
-                    onClick={() => onConfirm(instance)}
+                    disabled={busy === instance.id}
+                    onClick={() => onResolve(instance, false)}
+                    className="rounded-full px-4 py-2 text-sm font-medium"
+                    style={{
+                      color: "var(--status-critical)",
+                      boxShadow: "inset 0 0 0 1px var(--hairline-strong)",
+                      opacity: busy === instance.id ? 0.6 : 1,
+                    }}
+                  >
+                    Not this payment
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy === instance.id || !txn || txn.status === "voided"}
+                    onClick={() => onResolve(instance, true)}
                     className="rounded-full px-4 py-2 text-sm font-medium"
                     style={{
                       background: "var(--accent)",
                       color: "#fff",
-                      opacity: busy === instance.id || !txn ? 0.6 : 1,
+                      opacity:
+                        busy === instance.id || !txn || txn.status === "voided" ? 0.6 : 1,
                     }}
                   >
                     {busy === instance.id ? "Confirming…" : "Yes, this paid it"}
@@ -205,9 +224,9 @@ export function MatchReview({
       )}
 
       <p className="mt-3 text-xs" style={{ color: "var(--text-muted)" }}>
-        Until a match is confirmed the commitment is still counted as owed, so safe to
-        spend and the balance curve keep reserving for it. If a suggestion is wrong,
-        leave it: editing the commitment&rsquo;s amount clears the link.
+        A linked payment replaces the planned commitment in forecasts so it is counted
+        once. Confirm the right match; choose &ldquo;Not this payment&rdquo; to restore a
+        wrong one and prevent the next sync from linking it again.
       </p>
     </>
   );

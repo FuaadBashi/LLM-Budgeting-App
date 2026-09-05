@@ -184,8 +184,9 @@ safe-to-spend by the same amount. An obligation must move from *committed* to *s
 step, never appearing in both states or neither.
 
 Matching is by amount and date proximity, plus the obligation's category and funding account when
-either was specified. A match is a *suggestion* until confirmed; an unconfirmed suggestion remains
-in every commitment total and forecast.
+either was specified. The **link** is what O1 acts on: once it exists the payment is already in the
+ledger, so the instance leaves the forecasts whether or not anyone has reviewed the link yet.
+Confirming a match records that a person looked at it, and moves no figure.
 
 Recurrence follows RFC 5545 (iCalendar RRULE) semantics. Month-end rules **clamp**: "the 31st"
 in February resolves to the 28th/29th.
@@ -203,10 +204,25 @@ this is applied consistently. Leap years follow from it with no calendar arithme
 
 **Matching.** An obligation instance is matched to a posted transaction by exact amount, a
 booking date within ±3 days, and the **expense leg** (so a card-funded bill still matches). Any
-declared category or funding account must match too. A suggested link does not remove the instance
-from forecasts until it is confirmed; one transaction satisfies at most one instance. The rule
-leans strict because the failure is asymmetric: a wrong link removes a real commitment from the
-forecast and overstates what is safe to spend.
+declared category or funding account must match too, and one transaction satisfies at most one
+instance. If more than one transaction qualifies, or one transaction could satisfy more than one
+instance, none is selected: row order is not financial evidence. The rule leans strict because the
+failure is asymmetric: a wrong link removes a real commitment from the forecast and overstates
+what is safe to spend — and strictness, not a confirmation step, is what carries that weight.
+Gating the figures on confirmation was tried and broke O1 instead: the paid bill sat in `Spent` and
+in `NearTermCommitted` at once, and the balance curve drew a second drop for money that had already
+gone.
+
+`match_confirmed` is therefore a review flag with no bearing on any figure. It drives one thing —
+the worklist of links nobody has accepted yet. Every link is reversible: **Unmatch** restores the
+commitment immediately and disables automatic matching for that occurrence, so sync cannot
+recreate a suggestion the user rejected. Voiding a linked transaction also reopens the occurrence
+in the same database commit; a voided transaction can never be confirmed as fulfilment.
+
+Editing a recurring rule changes today's and future unmatched occurrences only. Past occurrences
+and matched payments retain the amount they carried at the time. Shortening an end date removes
+unmatched generated occurrences beyond it; extending or clearing the end regenerates the newly
+reachable future schedule.
 
 ---
 

@@ -733,6 +733,10 @@ export const getObligationInstances = (
 export const confirmObligationMatch = (instanceId: string) =>
   post<ObligationInstance>(`/obligations/instances/${instanceId}/confirm`, {});
 
+/** Remove a wrong association and keep this occurrence out of auto-matching. */
+export const unmatchObligationMatch = (instanceId: string) =>
+  post<ObligationInstance>(`/obligations/instances/${instanceId}/unmatch`, {});
+
 export const createGoal = (body: unknown) => post<Goal>("/goals", body);
 export const createBudget = (body: unknown) => post<BudgetSummary>("/budgets", body);
 export const createObligation = (body: unknown) => post<Obligation>("/obligations", body);

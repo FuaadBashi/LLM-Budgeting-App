@@ -265,8 +265,10 @@ def test_matching_rejects_a_date_outside_the_window(session, accounts):
     assert match_instances(session, TODAY).matched == 0
 
 
-def test_one_transaction_cannot_satisfy_two_instances(session, accounts):
-    """Two instances close enough to share a window must not both claim one payment."""
+def test_one_transaction_that_could_satisfy_two_instances_is_left_unmatched(
+    session, accounts
+):
+    """The matcher cannot infer which of two identical bills one payment cleared."""
     add_obligation(session, "Rent", "600", date(2026, 8, 10))
     add_obligation(session, "Storage", "600", date(2026, 8, 11))
     generate_instances(session, date(2026, 8, 31))
@@ -276,7 +278,7 @@ def test_one_transaction_cannot_satisfy_two_instances(session, accounts):
         "Payment",
         [(accounts["current"], "-600"), (accounts["groceries"], "600")],
     )
-    assert match_instances(session, TODAY).matched == 1
+    assert match_instances(session, TODAY).matched == 0
 
 
 def test_matching_uses_the_expense_leg_not_the_cash_leg(session, accounts):

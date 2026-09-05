@@ -19,10 +19,15 @@ from app.api.schemas import from_minor, to_minor
 from app.db import get_session
 from app.domain import calendar as cal
 from app.domain.clock import today as clock_today
-from app.domain.obligation_scope import unresolved
+from app.domain.obligation_scope import awaiting_review, unmatched
 from app.domain.obligations import generate_instances, match_instances
 from app.domain.recurrence import Frequency, build_rule
-from app.models import FutureObligation, ObligationInstance
+from app.models import (
+    FutureObligation,
+    ObligationInstance,
+    Transaction,
+    TransactionStatus,
+)
 
 router = APIRouter()
 
@@ -44,7 +49,7 @@ class ObligationIn(BaseModel):
 
 
 class ObligationUpdate(BaseModel):
-    """Fields that can change without re-shaping the schedule.
+    """Fields that can change without moving historical occurrence dates.
 
     The recurrence rule and first due date are deliberately absent: changing
     either moves every generated instance, including ones already matched to
@@ -103,6 +108,19 @@ def _obligation_out(ob: FutureObligation) -> ObligationOut:
     )
 
 
+def _instance_out(inst: ObligationInstance, ob: FutureObligation) -> InstanceOut:
+    return InstanceOut(
+        id=inst.id,
+        obligation_id=inst.obligation_id,
+        obligation_name=ob.name,
+        due_date=inst.due_date,
+        amount_minor=to_minor(inst.amount),
+        fulfilled=inst.fulfilled,
+        fulfilled_by_transaction_id=inst.fulfilled_by_transaction_id,
+        match_confirmed=inst.match_confirmed,
+    )
+
+
 @router.get("/obligations", response_model=list[ObligationOut])
 def list_obligations(session: Session = Depends(get_session)) -> list[ObligationOut]:
     return [
@@ -150,25 +168,39 @@ def update_obligation(
 ) -> ObligationOut:
     """Amend a commitment.
 
-    Changing the amount rewrites **unfulfilled** instances too. They carry a copy
-    of the amount rather than reading through, so without this a rent rise would
-    leave every projected instance at the old figure while the obligation itself
-    showed the new one -- two numbers for the same bill.
+    Changes apply to today's and future unmatched occurrences. Past occurrences
+    and anything already linked to a real transaction are history, so editing a
+    recurring rule must not restate them.
 
-    A confirmed instance keeps its historical amount and link. An unconfirmed
-    suggestion is cleared when the amount changes because exact amount was part
-    of the evidence used to create it.
+    Shortening an end date removes only unmatched generated occurrences beyond
+    it; matched history remains. Extending or clearing it materialises the newly
+    reachable schedule up to the normal horizon.
     """
     ob = session.get(FutureObligation, obligation_id)
     if ob is None:
         raise HTTPException(status_code=404, detail="obligation not found")
-    if payload.end_date and payload.end_date < ob.first_due_date:
+    fields = payload.model_fields_set
+    if (
+        "end_date" in fields
+        and payload.end_date is not None
+        and payload.end_date < ob.first_due_date
+    ):
         raise HTTPException(422, "end_date must not precede first_due_date")
+
+    today = clock_today(session)
 
     if payload.name is not None:
         ob.name = payload.name
-    if payload.end_date is not None:
+    if "end_date" in fields:
         ob.end_date = payload.end_date
+        if payload.end_date is not None:
+            for instance in session.scalars(
+                select(ObligationInstance)
+                .where(ObligationInstance.obligation_id == ob.id)
+                .where(ObligationInstance.due_date > payload.end_date)
+                .where(unmatched())
+            ):
+                session.delete(instance)
     if payload.hard is not None:
         ob.hard = payload.hard
     if payload.active is not None:
@@ -179,17 +211,25 @@ def update_obligation(
     if payload.amount_minor is not None:
         new_amount = from_minor(payload.amount_minor)
         ob.amount = new_amount
+        # Only instances no payment is linked to. A matched instance records
+        # what was actually committed at the time, and a rent rise must not
+        # rewrite what last month cost -- nor drop the link, which would put a
+        # bill that is already paid back into every forecast.
         for instance in session.scalars(
             select(ObligationInstance)
             .where(ObligationInstance.obligation_id == ob.id)
-            .where(ObligationInstance.match_confirmed.is_(False))
+            .where(unmatched())
+            .where(ObligationInstance.due_date >= today)
         ):
             instance.amount = new_amount
-            # The suggestion was made because the old amount matched exactly.
-            # Once the commitment changes, that evidence no longer holds.
-            instance.fulfilled_by_transaction_id = None
 
     session.commit()
+    if "end_date" in fields:
+        horizon = today + timedelta(days=DEFAULT_HORIZON_DAYS)
+        if ob.end_date is not None:
+            horizon = min(horizon, ob.end_date)
+        if horizon >= ob.first_due_date:
+            generate_instances(session, horizon, ob)
     session.refresh(ob)
     return _obligation_out(ob)
 
@@ -219,15 +259,14 @@ def list_instances(
 ) -> list[InstanceOut]:
     """Instances due up to ``until``.
 
-    ``include_fulfilled`` is the single switch, and it means what the forecasts
-    mean: by default the list is exactly the set still counted as committed --
-    instances with no payment or only an unconfirmed suggestion.
-    ``include_fulfilled=true`` returns
-    everything, and each row carries ``fulfilled``,
-    ``fulfilled_by_transaction_id`` and ``match_confirmed``, so a review screen
-    finds the suggestions to confirm as the linked-but-unconfirmed rows of that
-    list. One flag with one meaning, rather than a second one that could
-    contradict it.
+    This is a worklist, not a forecast term. By default it returns what a
+    person still has to act on -- bills with no payment linked, plus links the
+    matcher guessed at that nobody has accepted -- so the review screen finds
+    its rows here. The forecasts do not read this predicate: a linked instance
+    has already left them, confirmed or not (invariant O1).
+
+    ``include_fulfilled=true`` returns everything. Each row carries
+    ``fulfilled``, ``fulfilled_by_transaction_id`` and ``match_confirmed``.
     """
     today = clock_today(session)
     end = until or today + timedelta(days=90)
@@ -239,19 +278,10 @@ def list_instances(
         .order_by(ObligationInstance.due_date)
     )
     if not include_fulfilled:
-        q = q.where(unresolved())
+        q = q.where(awaiting_review())
 
     return [
-        InstanceOut(
-            id=inst.id,
-            obligation_id=inst.obligation_id,
-            obligation_name=ob.name,
-            due_date=inst.due_date,
-            amount_minor=to_minor(inst.amount),
-            fulfilled=inst.fulfilled,
-            fulfilled_by_transaction_id=inst.fulfilled_by_transaction_id,
-            match_confirmed=inst.match_confirmed,
-        )
+        _instance_out(inst, ob)
         for inst, ob in session.execute(q).all()
     ]
 
@@ -262,29 +292,48 @@ def confirm_match(
 ) -> InstanceOut:
     """Record that a person has accepted a suggested match.
 
-    Confirmation authorises forecasts to treat the payment as fulfilment. Until
-    then the conservative failure mode is to keep reserving the bill; a wrong
-    automatic suggestion must never overstate safe-to-spend.
+    The link already prevents double-counting. Confirmation records that a person
+    reviewed it and moves no figure; a wrong suggestion is removed with the
+    adjacent unmatch action.
     """
     inst = session.get(ObligationInstance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")
     if inst.fulfilled_by_transaction_id is None:
         raise HTTPException(422, "instance has no match to confirm")
+    txn = session.get(Transaction, inst.fulfilled_by_transaction_id)
+    if txn is None or txn.status != TransactionStatus.POSTED:
+        raise HTTPException(422, "matched transaction is not posted; unmatch it")
     inst.match_confirmed = True
     session.commit()
 
     ob = session.get(FutureObligation, inst.obligation_id)
-    return InstanceOut(
-        id=inst.id,
-        obligation_id=inst.obligation_id,
-        obligation_name=ob.name,
-        due_date=inst.due_date,
-        amount_minor=to_minor(inst.amount),
-        fulfilled=inst.fulfilled,
-        fulfilled_by_transaction_id=inst.fulfilled_by_transaction_id,
-        match_confirmed=inst.match_confirmed,
-    )
+    return _instance_out(inst, ob)
+
+
+@router.post("/obligations/instances/{instance_id}/unmatch", response_model=InstanceOut)
+def unmatch(
+    instance_id: uuid.UUID, session: Session = Depends(get_session)
+) -> InstanceOut:
+    """Reject a suggested or confirmed association and restore the commitment.
+
+    The rejection disables future automatic matching for this occurrence. Without
+    that memory, the next sync would recreate the same link and make the control a
+    cosmetic button rather than a reversible financial action.
+    """
+    inst = session.get(ObligationInstance, instance_id)
+    if inst is None:
+        raise HTTPException(404, "instance not found")
+    if inst.fulfilled_by_transaction_id is None:
+        raise HTTPException(422, "instance has no match to remove")
+
+    inst.fulfilled_by_transaction_id = None
+    inst.match_confirmed = False
+    inst.auto_match_disabled = True
+    session.commit()
+
+    ob = session.get(FutureObligation, inst.obligation_id)
+    return _instance_out(inst, ob)
 
 
 # --------------------------------------------------------------------------
