@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { voidTransaction, type Transaction } from "@/lib/api";
-import { formatMinor, formatSignedMinor } from "@/lib/money";
+import { formatSignedMinor } from "@/lib/money";
 
 const CLASS_LABEL: Record<string, string> = {
   income: "Income",

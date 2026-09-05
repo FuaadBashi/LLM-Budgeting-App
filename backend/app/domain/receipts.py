@@ -199,6 +199,7 @@ class OpenAICompatibleReader:
                 max_tokens=512,
                 image=image,
                 image_media_type=media_type,
+                json_object=True,
             )
         except providers.ProviderError as exc:
             log.warning("receipt read failed: %s", exc)
@@ -217,6 +218,7 @@ class OpenAICompatibleReader:
                 max_tokens=200,
                 image=image,
                 image_media_type=media_type,
+                json_object=True,
             )
         except providers.ProviderError as exc:
             log.warning("receipt verification failed: %s", exc)
@@ -413,6 +415,10 @@ def stage(
     account_id,
     today: date,
     reader: Reader | None = None,
+    verify: bool = True,
+    enrich: bool = True,
+    model_features: bool = True,
+    duplicate_checker: importing.DuplicateChecker | None = None,
 ) -> ImportCandidate:
     """Read a receipt and stage it for review. Writes nothing to the ledger.
 
@@ -458,11 +464,12 @@ def stage(
     # A second, independent look at the same image -- never lets a bad read
     # through on its own (A1' already requires a person either way), but gives
     # the reviewer a reason to look closer than "the model said so once".
-    try:
-        verification = active_reader.verify(image, media_type, read)
-    except Exception as exc:  # noqa: BLE001 -- a second opinion is never critical
-        log.warning("receipt verification skipped: %s", exc)
-        verification = None
+    verification = None
+    if verify:
+        try:
+            verification = active_reader.verify(image, media_type, read)
+        except Exception as exc:  # noqa: BLE001 -- a second opinion is never critical
+            log.warning("receipt verification skipped: %s", exc)
 
     when = read.when or today
 
@@ -495,19 +502,43 @@ def stage(
     # Classify BEFORE any candidate exists. `classify_duplicates` scans staged
     # candidates as well as the ledger, so a row flushed first finds itself and
     # is flagged as its own duplicate.
+    parsed_items = [
+        importing.ParsedRow(
+            row_number=i,
+            booking_date=when,
+            description=item.description,
+            merchant=read.merchant,
+            amount=-abs(item.amount),
+            raw={},
+        )
+        for i, item in enumerate(items, start=1)
+    ]
+    # A split receipt is still one bank payment. Check the reconciled grand
+    # total as well as each line, or a £42.30 bank row is missed merely because
+    # the receipt happened to itemise it as £12.30 + £30.00.
+    if len(items) > 1:
+        parsed_items.insert(
+            0,
+            importing.ParsedRow(
+                row_number=0,
+                booking_date=when,
+                description=read.merchant or "Receipt",
+                merchant=read.merchant,
+                amount=-abs(read.total),
+                raw={},
+            ),
+        )
     verdicts = importing.classify_duplicates(
         session,
         account_id,
-        [
-            importing.ParsedRow(
-                row_number=i, booking_date=when, description=item.description,
-                merchant=read.merchant, amount=-abs(item.amount), raw={},
-            )
-            for i, item in enumerate(items, start=1)
-        ],
+        parsed_items,
+        duplicate_checker=duplicate_checker,
     )
+    whole_verdict = verdicts.pop(0, None)
 
     candidates: list[ImportCandidate] = []
+    #: (candidate, target) pairs whose duplicate target is another candidate.
+    intra_batch: list[tuple[ImportCandidate, object]] = []
     for i, item in enumerate(items, start=1):
         candidate = ImportCandidate(
             batch_id=batch.id,
@@ -536,52 +567,44 @@ def stage(
         )
         # Same duplicate check a statement row gets: a receipt for a payment
         # already imported from the bank is the common case, not the exception.
-        verdict = verdicts.get(i)
+        # The whole-receipt verdict wins over a line's own: if the payment for
+        # the full total is already recorded, every line of the split is
+        # already in the ledger, whereas a line-level match on top of that
+        # would point one sibling of the same payment somewhere else.
+        verdict = whole_verdict or verdicts.get(i)
         if verdict is not None:
             kind, target = verdict
-            candidate.status = CandidateStatus.DUPLICATE
             if kind == "transaction":
+                candidate.status = CandidateStatus.DUPLICATE
                 candidate.duplicate_of_transaction_id = target
+            else:
+                # Deferred: a "candidate" target is either an id from an
+                # earlier upload or a plain row_number from this batch, whose
+                # candidate has no id until the flush below.
+                intra_batch.append((candidate, target))
         session.add(candidate)
         candidates.append(candidate)
 
     session.flush()
 
-    try:
-        from app.domain import enrichment
+    by_row = {c.row_number: c for c in candidates}
+    for candidate, target in intra_batch:
+        if isinstance(target, int):
+            earlier = by_row.get(target)
+            # Row 0 is the synthetic grand total, which is never staged, so a
+            # line colliding with its fingerprint has nothing to point at. No
+            # candidate means no duplicate: leave it pending for a person
+            # rather than writing a reference to a row that does not exist.
+            resolved = earlier.id if earlier is not None else None
+        else:
+            resolved = target
+        if resolved is None:
+            continue
+        candidate.status = CandidateStatus.DUPLICATE
+        candidate.duplicate_of_candidate_id = resolved
 
-        descriptions = [c.description for c in candidates]
-        category_flagged: dict[str, str] = {}
-        suggestions = enrichment.resolve(
-            session, descriptions, flagged=category_flagged
-        )
-        for candidate in candidates:
-            key = importing.normalise_description(candidate.description)
-            candidate.suggested_category_id = suggestions.get(key)
-            if key in category_flagged:
-                # Appended, not overwritten -- the image read may already
-                # have left its own note here, and both are worth a look.
-                note = f"A second look didn't agree this was {category_flagged[key]}."
-                existing = candidate.raw.get("verification_note") or ""
-                candidate.raw = {
-                    **candidate.raw,
-                    "verification_note": f"{existing} {note}".strip(),
-                }
-    except Exception as exc:  # noqa: BLE001
-        log.warning("category suggestion skipped for receipt: %s", exc)
-
-    try:
-        from app.domain import canonical
-
-        descriptions = [c.description for c in candidates]
-        names = canonical.resolve(session, descriptions)
-        for candidate in candidates:
-            key = importing.normalise_description(candidate.description)
-            name = names.get(key)
-            if name:
-                candidate.raw = {**candidate.raw, "canonical_name": name}
-    except Exception as exc:  # noqa: BLE001
-        log.warning("canonical name lookup skipped for receipt: %s", exc)
+    if enrich:
+        importing.enrich_batch(session, batch.id, use_models=model_features)
 
     session.commit()
     for candidate in candidates:

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { downloadExport, restoreBackup, type RestoreResult } from "@/lib/api";
 
 const FORMATS = [
@@ -116,8 +117,8 @@ export function DataManager({ empty }: { empty: boolean }) {
         <h2 className="section-label mb-3">Backup</h2>
         <div className="card flex flex-wrap items-center gap-4 p-5">
           <p className="min-w-0 flex-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            The complete ledger as JSON, with amounts as decimal strings so nothing rounds
-            on the way out. This is the only export a restore can read.
+            Every durable finance record as JSON — ledger, budgets, goals, commitments,
+            scenarios and import history — with exact decimal strings.
             <span className="mt-1 block text-xs" style={{ color: "var(--text-muted)" }}>
               Ignores the date range above — a partial backup is not a backup.
             </span>
@@ -146,6 +147,7 @@ export function DataManager({ empty }: { empty: boolean }) {
 }
 
 function RestorePanel({ empty }: { empty: boolean }) {
+  const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<{ name: string; payload: unknown; counts: string } | null>(null);
   const [confirm, setConfirm] = useState("");
@@ -195,6 +197,7 @@ function RestorePanel({ empty }: { empty: boolean }) {
       setFile(null);
       setConfirm("");
       if (input.current) input.current.value = "";
+      router.refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Restore failed.");
     } finally {
@@ -212,7 +215,7 @@ function RestorePanel({ empty }: { empty: boolean }) {
         <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
           <span aria-hidden style={{ color: "var(--status-warning)" }}>▲</span>{" "}
           {needsConfirmation
-            ? "This database is not empty. Restoring replaces every account, category and transaction in it — the current contents are not recoverable afterwards unless you have your own backup."
+            ? "This database is not empty. Restoring replaces all finance data in it — ledger, plans, scenarios and import history. The current contents are not recoverable unless you have a separate backup."
             : "This database is empty, so a restore has nothing to overwrite."}
         </p>
 
@@ -262,7 +265,7 @@ function RestorePanel({ empty }: { empty: boolean }) {
         {done && (
           <p className="text-sm" role="status" style={{ color: "var(--status-good)" }}>
             ✓ Restored {done.accounts} accounts, {done.categories} categories,{" "}
-            {done.transactions} transactions and {done.postings} postings. Reload to see them.
+            {done.transactions} transactions and {done.postings} postings. The page is refreshing.
           </p>
         )}
 

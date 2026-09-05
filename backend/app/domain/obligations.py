@@ -17,9 +17,10 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.domain.categories import scope_ids
 from app.domain.money import ZERO
 from app.domain.recurrence import expand
 from app.models.enums import AccountKind
@@ -84,15 +85,48 @@ def generate_instances(
     return GenerationResult(created=created, skipped_existing=skipped)
 
 
-def _expense_total(session: Session, transaction_id) -> Decimal:
-    """The expense-leg total of a transaction -- what it actually cost."""
-    total = session.scalar(
-        select(func.coalesce(func.sum(Posting.amount), ZERO))
-        .join(Account, Posting.account_id == Account.id)
-        .where(Posting.transaction_id == transaction_id)
-        .where(Account.kind == AccountKind.EXPENSE)
-    )
-    return total or ZERO
+def _matches_obligation(
+    session: Session,
+    txn: Transaction,
+    obligation: FutureObligation,
+    amount: Decimal,
+) -> bool:
+    """Whether ``txn`` satisfies the commitment's declared identity.
+
+    Exact amount and date alone are not enough: a grocery shop and a rent
+    payment can legitimately cost the same. Optional category/account fields
+    are constraints, not display-only metadata.
+    """
+    expense_legs: list[Posting] = []
+    for posting in txn.postings:
+        account = session.get(Account, posting.account_id)
+        if (
+            account is not None
+            and account.kind == AccountKind.EXPENSE
+            and posting.amount > ZERO
+        ):
+            expense_legs.append(posting)
+
+    if sum((p.amount for p in expense_legs), ZERO) != amount:
+        return False
+
+    if obligation.category_id is not None:
+        allowed = scope_ids(session, obligation.category_id) or {obligation.category_id}
+        scoped = sum(
+            (p.amount for p in expense_legs if p.category_id in allowed), ZERO
+        )
+        if scoped != amount:
+            return False
+
+    if obligation.account_id is not None:
+        movement = sum(
+            (p.amount for p in txn.postings if p.account_id == obligation.account_id),
+            ZERO,
+        )
+        if movement != -amount:
+            return False
+
+    return True
 
 
 @dataclass(frozen=True)
@@ -103,10 +137,11 @@ class MatchResult:
 def match_instances(session: Session, today: date) -> MatchResult:
     """Link unfulfilled instances to transactions that appear to have paid them.
 
-    A match is a *suggestion*: ``match_confirmed`` stays False until the user
-    accepts it. Auto-matching therefore has to be conservative -- an exact amount
-    and a booking date within a few days -- because a wrong link removes a real
-    commitment from the forecast, which overstates what is safe to spend.
+    A link is evidence, not authority: ``match_confirmed`` stays False until a
+    person accepts it, and forecasts keep reserving the commitment meanwhile.
+    Matching is still deliberately strict -- exact amount, a nearby booking
+    date, and the declared category/funding account when present -- so the
+    review queue contains plausible comparisons rather than guesses.
 
     A transaction can satisfy at most one instance. Without that guard a single
     £600 payment would clear both September's and October's rent whenever the two
@@ -128,6 +163,9 @@ def match_instances(session: Session, today: date) -> MatchResult:
     ).all()
 
     for instance in unfulfilled:
+        obligation = session.get(FutureObligation, instance.obligation_id)
+        if obligation is None:
+            continue
         lo = instance.due_date - timedelta(days=MATCH_WINDOW_DAYS)
         hi = instance.due_date + timedelta(days=MATCH_WINDOW_DAYS)
 
@@ -142,7 +180,7 @@ def match_instances(session: Session, today: date) -> MatchResult:
         for txn in candidates:
             if txn.id in claimed:
                 continue
-            if _expense_total(session, txn.id) != instance.amount:
+            if not _matches_obligation(session, txn, obligation, instance.amount):
                 continue
             instance.fulfilled_by_transaction_id = txn.id
             instance.match_confirmed = False

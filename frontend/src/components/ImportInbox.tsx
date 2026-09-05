@@ -110,6 +110,7 @@ export function ImportInbox({
       router.refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "That did not work.");
+      throw reason;
     } finally {
       setBusy(null);
     }

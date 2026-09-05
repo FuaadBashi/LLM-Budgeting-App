@@ -183,8 +183,9 @@ next week's rent drops the obligation while the cash is still in the account, in
 safe-to-spend by the same amount. An obligation must move from *committed* to *spent* in one
 step, never appearing in both states or neither.
 
-Matching is by amount, date proximity and account. A match is a *suggestion* until confirmed;
-auto-matching requires exact amount and a date within ±3 days.
+Matching is by amount and date proximity, plus the obligation's category and funding account when
+either was specified. A match is a *suggestion* until confirmed; an unconfirmed suggestion remains
+in every commitment total and forecast.
 
 Recurrence follows RFC 5545 (iCalendar RRULE) semantics. Month-end rules **clamp**: "the 31st"
 in February resolves to the 28th/29th.
@@ -201,8 +202,9 @@ Rules are built from a frequency and an anchor by the server, never supplied raw
 this is applied consistently. Leap years follow from it with no calendar arithmetic.
 
 **Matching.** An obligation instance is matched to a posted transaction by exact amount, a
-booking date within ±3 days, and the **expense leg** (so a card-funded bill still matches). A
-match is a suggestion until confirmed; one transaction satisfies at most one instance. The rule
+booking date within ±3 days, and the **expense leg** (so a card-funded bill still matches). Any
+declared category or funding account must match too. A suggested link does not remove the instance
+from forecasts until it is confirmed; one transaction satisfies at most one instance. The rule
 leans strict because the failure is asymmetric: a wrong link removes a real commitment from the
 forecast and overstates what is safe to spend.
 

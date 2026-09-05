@@ -17,7 +17,8 @@ from app.db import get_session
 from app.domain.disposable import account_balances, net_worth
 from app.domain.restore import RestoreError, restore, validate
 from app.main import app
-from app.models import Transaction
+from app.domain import backup as backup_module
+from app.models import ImportBatch, Scenario, Transaction
 from tests.conftest import post
 
 
@@ -109,6 +110,40 @@ def test_restore_preserves_exact_decimals(client, session, populated, accounts):
     assert account_balances(session)[accounts["current"].id] == Decimal("3137.60")
 
 
+def test_v2_restore_preserves_planning_and_import_history(
+    session, populated, accounts
+):
+    """Replace must not CASCADE-delete data the backup never serialised."""
+    session.add(
+        Scenario(
+            name="Move flat",
+            baseline_date=date(2026, 8, 31),
+            horizon_months=18,
+            assumptions={"monthly_expense_delta_minor": 12500},
+            notes="keep me",
+        )
+    )
+    session.add(
+        ImportBatch(
+            filename="august.csv",
+            content_hash="a" * 64,
+            account_id=accounts["current"].id,
+            profile="generic",
+            row_count=0,
+            notes="reviewed",
+        )
+    )
+    session.commit()
+
+    before = backup_module.build_payload(session)["tables"]
+    payload = backup_module.build_payload(session)
+    restore(session, payload, replace=True)
+    session.expunge_all()
+
+    after = backup_module.build_payload(session)["tables"]
+    assert after == before
+
+
 # --------------------------------------------------------------------------
 # Refusing to do damage
 # --------------------------------------------------------------------------
@@ -145,7 +180,7 @@ def test_malformed_envelopes_are_rejected(client, session, populated, mutate, me
 def test_an_unbalanced_backup_is_rejected_before_any_write(client, session, populated):
     """Validation runs first, so a bad file names the record rather than a trigger."""
     backup = json.loads(client.get("/api/export/backup.json").text)
-    backup["transactions"][0]["postings"][0]["amount"] = "999.99"
+    backup["tables"]["postings"][0]["amount"] = "999.99"
     wipe(session)
 
     with pytest.raises(RestoreError, match="sum to"):
@@ -157,7 +192,7 @@ def test_an_unbalanced_backup_is_rejected_before_any_write(client, session, popu
 def test_float_amounts_are_rejected(client, session, populated):
     """A float in the file means precision was already lost upstream."""
     backup = json.loads(client.get("/api/export/backup.json").text)
-    backup["transactions"][0]["postings"][0]["amount"] = 12.34
+    backup["tables"]["postings"][0]["amount"] = 12.34
     with pytest.raises(RestoreError, match="float"):
         validate(backup)
 

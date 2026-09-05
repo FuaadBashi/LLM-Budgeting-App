@@ -174,6 +174,20 @@ def test_a_row_repeated_inside_one_file_is_flagged_against_the_earlier_one(
     assert rows[1].duplicate_of_candidate_id == rows[0].id
 
 
+def test_staged_rows_from_another_account_are_not_duplicates(
+    client, accounts, session
+):
+    first = "date,description,amount\n2026-08-04,Same transfer,-10.00\n"
+    second = "date,description,amount,note\n2026-08-04,Same transfer,-10.00,x\n"
+    upload(client, accounts["current"].id, first)
+    upload(client, accounts["cash"].id, second)
+
+    rows = list(session.scalars(select(ImportCandidate)))
+    cash_row = next(r for r in rows if r.batch.account_id == accounts["cash"].id)
+    assert cash_row.status == CandidateStatus.PENDING
+    assert cash_row.duplicate_of_candidate_id is None
+
+
 def test_a_date_shifted_by_a_day_is_still_the_same_payment(client, accounts, session):
     """Banks move dates between pending and settled exports."""
     post(session, date(2026, 8, 5), "PRET A MANGER",

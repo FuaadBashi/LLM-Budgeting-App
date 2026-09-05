@@ -6,7 +6,6 @@ import { CategoryBars } from "@/components/CategoryBars";
 import { MonthlyBars } from "@/components/MonthlyBars";
 import { StatTile } from "@/components/StatTile";
 import {
-  API_BASE,
   getAllocation,
   getMonthly,
   getPeriodSummary,
@@ -36,6 +35,10 @@ export default async function AnalyticsPage({
   const start = params.start || undefined;
   const end = params.end || undefined;
   const customRange = Boolean(start || end);
+  const rangeQuery = new URLSearchParams();
+  if (start) rangeQuery.set("start", start);
+  if (end) rangeQuery.set("end", end);
+  const exportSuffix = rangeQuery.size ? `?${rangeQuery.toString()}` : "";
 
   let period: PeriodSummary | null = null;
   let months: PeriodSummary[] = [];
@@ -45,7 +48,7 @@ export default async function AnalyticsPage({
   try {
     [period, months, allocation] = await Promise.all([
       getPeriodSummary(start, end),
-      getMonthly(),
+      getMonthly(start, end),
       getAllocation(start, end),
     ]);
   } catch (e) {
@@ -262,7 +265,7 @@ export default async function AnalyticsPage({
           <h2 className="section-label mb-3">Export</h2>
           <div className="card flex flex-wrap gap-3 p-5">
             <a
-              href={`${API_BASE}/export/summary.csv`}
+              href={`/api/export/summary.csv${exportSuffix}`}
               className="rounded-full px-4 py-2 text-sm"
               style={{
                 color: "var(--text-secondary)",
@@ -272,7 +275,7 @@ export default async function AnalyticsPage({
               Summary (CSV)
             </a>
             <a
-              href={`${API_BASE}/export/transactions.csv`}
+              href={`/api/export/transactions.csv${exportSuffix}`}
               className="rounded-full px-4 py-2 text-sm"
               style={{
                 color: "var(--text-secondary)",
@@ -282,7 +285,7 @@ export default async function AnalyticsPage({
               Postings (CSV)
             </a>
             <a
-              href={`${API_BASE}/export/backup.json`}
+              href="/api/export/backup.json"
               className="rounded-full px-4 py-2 text-sm"
               style={{
                 color: "var(--text-secondary)",

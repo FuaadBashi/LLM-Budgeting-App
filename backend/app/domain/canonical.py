@@ -82,6 +82,7 @@ class OpenAICompatibleCanonicalizer:
                 model=self.model,
                 prompt=PROMPT.format(descriptions="\n".join(f"- {d}" for d in descriptions)),
                 max_tokens=self._max_tokens,
+                json_object=True,
             )
         except providers.ProviderError as exc:
             log.warning("canonicalisation request failed: %s", exc)

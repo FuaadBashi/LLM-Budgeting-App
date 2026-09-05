@@ -479,6 +479,73 @@ def test_a_split_candidate_can_still_be_flagged_as_a_duplicate(session, accounts
     assert rows["Bread"].status == CandidateStatus.PENDING
 
 
+def test_a_split_receipt_matches_the_single_bank_payment_for_its_total(
+    session, accounts
+):
+    paid = post(
+        session,
+        date(2026, 8, 18),
+        "WAITROSE",
+        [(accounts["current"], "-12.00"), (accounts["groceries"], "12.00")],
+    )
+    read = a_receipt(
+        merchant="WAITROSE",
+        when=date(2026, 8, 18),
+        total="12.00",
+        line_items=(item("Milk", "2.00"), item("Bread", "10.00")),
+    )
+
+    stage(session, accounts, FakeReader(read))
+
+    rows = list(session.scalars(select(ImportCandidate)))
+    assert len(rows) == 2
+    assert all(r.status == CandidateStatus.DUPLICATE for r in rows)
+    assert all(r.duplicate_of_transaction_id == paid.id for r in rows)
+
+
+def test_a_receipt_listing_the_same_item_twice_stages_without_error(
+    session, accounts
+):
+    """Two identical lines are an ordinary receipt. The second is flagged
+    against the first candidate's real id, not against its row number -- a
+    row number is a smallint and the column is a uuid."""
+    read = a_receipt(
+        merchant="CAFE",
+        when=date(2026, 8, 18),
+        total="6.00",
+        line_items=(item("Coffee", "3.00"), item("Coffee", "3.00")),
+    )
+
+    stage(session, accounts, FakeReader(read))
+
+    rows = sorted(session.scalars(select(ImportCandidate)), key=lambda r: r.row_number)
+    assert len(rows) == 2
+    first, second = rows
+    assert first.status == CandidateStatus.PENDING
+    assert second.status == CandidateStatus.DUPLICATE
+    assert second.duplicate_of_candidate_id == first.id
+
+
+def test_the_third_copy_of_a_line_points_at_the_first_candidate(session, accounts):
+    read = a_receipt(
+        merchant="CAFE",
+        when=date(2026, 8, 18),
+        total="9.00",
+        line_items=(
+            item("Coffee", "3.00"),
+            item("Coffee", "3.00"),
+            item("Coffee", "3.00"),
+        ),
+    )
+
+    stage(session, accounts, FakeReader(read))
+
+    rows = sorted(session.scalars(select(ImportCandidate)), key=lambda r: r.row_number)
+    assert [r.duplicate_of_candidate_id for r in rows] == [
+        None, rows[0].id, rows[0].id
+    ]
+
+
 # --------------------------------------------------------------------------
 # Line-item parsing
 # --------------------------------------------------------------------------

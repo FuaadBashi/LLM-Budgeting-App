@@ -14,12 +14,13 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.domain.clock import today as clock_today
 from app.domain.income import next_date as income_next_date
 from app.domain.ledger_scope import posted_transaction_ids
+from app.domain.obligation_scope import still_committed_as_of
 from app.models.enums import ASSET_KINDS, LIQUID_KINDS, AccountKind
 from app.models.ledger import Account, Posting, Transaction
 from app.models.planning import (
@@ -129,12 +130,7 @@ def near_term_committed_rows(session: Session, today: date, window_end: date):
         .where(ObligationInstance.due_date <= window_end)
         .where(FutureObligation.hard.is_(True))
         .where(FutureObligation.active.is_(True))
-        .where(
-            or_(
-                ObligationInstance.fulfilled_by_transaction_id.is_(None),
-                Transaction.booking_date > today,
-            )
-        )
+        .where(still_committed_as_of(today))
         .order_by(ObligationInstance.due_date)
     ).all()
 
@@ -163,12 +159,7 @@ def near_term_committed(session: Session, today: date, window_end: date) -> Deci
         .where(ObligationInstance.due_date <= window_end)
         .where(FutureObligation.hard.is_(True))
         .where(FutureObligation.active.is_(True))
-        .where(
-            or_(
-                ObligationInstance.fulfilled_by_transaction_id.is_(None),
-                Transaction.booking_date > today,
-            )
-        )
+        .where(still_committed_as_of(today))
     )
     return total or ZERO
 

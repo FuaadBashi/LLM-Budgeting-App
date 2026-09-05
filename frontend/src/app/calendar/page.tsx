@@ -1,15 +1,20 @@
 import { AppShell } from "@/components/AppShell";
 import { BalanceCurve } from "@/components/BalanceCurve";
+import { MatchReview } from "@/components/MatchReview";
 import { ObligationManager } from "@/components/ObligationManager";
 import { requireSession } from "@/lib/guard";
 import {
   getCalendar,
   getCategories,
+  getObligationInstances,
   getObligations,
+  getTransactions,
   type Category,
   type CalendarEvent,
   type FinancialCalendar,
   type Obligation,
+  type ObligationInstance,
+  type Transaction,
 } from "@/lib/api";
 import { formatMinor, formatSignedMinor } from "@/lib/money";
 
@@ -22,6 +27,43 @@ function shortDate(iso: string): string {
 }
 
 type UpcomingEvent = CalendarEvent & { day: string; below: boolean };
+
+function shiftDays(iso: string, days: number): string {
+  const shifted = new Date(`${iso}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
+/**
+ * The transactions behind the suggested matches, keyed by id.
+ *
+ * The instances endpoint returns only the transaction's id, and there is no
+ * fetch-one-transaction route, so they are collected in a single windowed list
+ * call. The window is the span of the due dates plus a week either side: the
+ * matcher only links a payment booked within three days of the due date, so
+ * this cannot miss one, and it keeps the request off the 200-row cap that a
+ * whole-history fetch would hit.
+ */
+async function transactionsForMatches(
+  instances: ObligationInstance[],
+): Promise<Record<string, Transaction>> {
+  const suggested = instances.filter(
+    (i) => i.fulfilled_by_transaction_id !== null && !i.match_confirmed,
+  );
+  if (suggested.length === 0) return {};
+
+  const dueDates = suggested.map((i) => i.due_date).sort();
+  const wanted = new Set(suggested.map((i) => i.fulfilled_by_transaction_id));
+  // Voided rows included deliberately: a commitment matched to a payment that
+  // was later voided is exactly the suggestion not to confirm.
+  const txns = await getTransactions(200, true, {
+    start: shiftDays(dueDates[0], -7),
+    end: shiftDays(dueDates[dueDates.length - 1], 7),
+  });
+  return Object.fromEntries(
+    txns.filter((t) => wanted.has(t.id)).map((t) => [t.id, t]),
+  );
+}
 
 function CalendarRow({ event: e }: { event: UpcomingEvent }) {
   return (
@@ -51,14 +93,18 @@ export default async function CalendarPage() {
   let obligations: Obligation[] = [];
   let calendar: FinancialCalendar | null = null;
   let categories: Category[] = [];
+  let instances: ObligationInstance[] = [];
+  let matched: Record<string, Transaction> = {};
   let error: string | null = null;
 
   try {
-    [obligations, calendar, categories] = await Promise.all([
+    [obligations, calendar, categories, instances] = await Promise.all([
       getObligations(),
       getCalendar(),
       getCategories(),
+      getObligationInstances(),
     ]);
+    matched = await transactionsForMatches(instances);
   } catch (e) {
     error = e instanceof Error ? e.message : "Unknown error";
   }
@@ -167,6 +213,10 @@ export default async function CalendarPage() {
                   )}
                 </div>
               )}
+            </section>
+
+            <section>
+              <MatchReview instances={instances} transactions={matched} />
             </section>
 
             <section>

@@ -83,8 +83,9 @@ def period_summary(
     session: Session = Depends(get_session),
 ) -> PeriodSummaryOut:
     today = clock_today(session)
-    if start is None or end is None:
-        start, end = analytics.month_bounds(today.year, today.month)
+    month_start, month_end = analytics.month_bounds(today.year, today.month)
+    start = start or month_start
+    end = end or month_end
     return _summary_out(analytics.summarise(session, start, end))
 
 
@@ -262,6 +263,16 @@ class RestoreResultOut(BaseModel):
     categories: int
     transactions: int
     postings: int
+
+
+class RestoreStatusOut(BaseModel):
+    empty: bool
+
+
+@router.get("/restore/status", response_model=RestoreStatusOut)
+def restore_status(session: Session = Depends(get_session)) -> RestoreStatusOut:
+    """Authoritative overwrite status; a paginated transaction list is not one."""
+    return RestoreStatusOut(empty=restore_module.is_empty(session))
 
 
 @router.post("/restore", response_model=RestoreResultOut)

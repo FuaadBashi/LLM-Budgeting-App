@@ -19,6 +19,7 @@ from app.api.schemas import from_minor, to_minor
 from app.db import get_session
 from app.domain import calendar as cal
 from app.domain.clock import today as clock_today
+from app.domain.obligation_scope import unresolved
 from app.domain.obligations import generate_instances, match_instances
 from app.domain.recurrence import Frequency, build_rule
 from app.models import FutureObligation, ObligationInstance
@@ -77,7 +78,8 @@ class InstanceOut(BaseModel):
     amount_minor: int
     fulfilled: bool
     fulfilled_by_transaction_id: uuid.UUID | None
-    #: False means the link is a suggestion the user has not accepted.
+    #: False means nobody has reviewed the link yet. It gates no figure --
+    #: ``fulfilled`` alone decides whether the instance is still forecast.
     match_confirmed: bool
 
 
@@ -153,9 +155,9 @@ def update_obligation(
     leave every projected instance at the old figure while the obligation itself
     showed the new one -- two numbers for the same bill.
 
-    Fulfilled instances keep their original amount. They record what was actually
-    committed at the time, and a later rent rise does not change what last month
-    cost.
+    A confirmed instance keeps its historical amount and link. An unconfirmed
+    suggestion is cleared when the amount changes because exact amount was part
+    of the evidence used to create it.
     """
     ob = session.get(FutureObligation, obligation_id)
     if ob is None:
@@ -180,9 +182,12 @@ def update_obligation(
         for instance in session.scalars(
             select(ObligationInstance)
             .where(ObligationInstance.obligation_id == ob.id)
-            .where(ObligationInstance.fulfilled_by_transaction_id.is_(None))
+            .where(ObligationInstance.match_confirmed.is_(False))
         ):
             instance.amount = new_amount
+            # The suggestion was made because the old amount matched exactly.
+            # Once the commitment changes, that evidence no longer holds.
+            instance.fulfilled_by_transaction_id = None
 
     session.commit()
     session.refresh(ob)
@@ -212,6 +217,18 @@ def list_instances(
     include_fulfilled: bool = False,
     session: Session = Depends(get_session),
 ) -> list[InstanceOut]:
+    """Instances due up to ``until``.
+
+    ``include_fulfilled`` is the single switch, and it means what the forecasts
+    mean: by default the list is exactly the set still counted as committed --
+    instances with no payment or only an unconfirmed suggestion.
+    ``include_fulfilled=true`` returns
+    everything, and each row carries ``fulfilled``,
+    ``fulfilled_by_transaction_id`` and ``match_confirmed``, so a review screen
+    finds the suggestions to confirm as the linked-but-unconfirmed rows of that
+    list. One flag with one meaning, rather than a second one that could
+    contradict it.
+    """
     today = clock_today(session)
     end = until or today + timedelta(days=90)
 
@@ -222,7 +239,7 @@ def list_instances(
         .order_by(ObligationInstance.due_date)
     )
     if not include_fulfilled:
-        q = q.where(ObligationInstance.fulfilled_by_transaction_id.is_(None))
+        q = q.where(unresolved())
 
     return [
         InstanceOut(
@@ -243,7 +260,12 @@ def list_instances(
 def confirm_match(
     instance_id: uuid.UUID, session: Session = Depends(get_session)
 ) -> InstanceOut:
-    """Accept a suggested match. Until this, the link is the engine's guess."""
+    """Record that a person has accepted a suggested match.
+
+    Confirmation authorises forecasts to treat the payment as fulfilment. Until
+    then the conservative failure mode is to keep reserving the bill; a wrong
+    automatic suggestion must never overstate safe-to-spend.
+    """
     inst = session.get(ObligationInstance, instance_id)
     if inst is None:
         raise HTTPException(404, "instance not found")

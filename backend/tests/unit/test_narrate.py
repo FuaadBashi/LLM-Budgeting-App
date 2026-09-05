@@ -146,6 +146,53 @@ def test_a_narration_with_no_figures_at_all_is_kept():
     assert not narrate.invents_figures("Groceries are running high.", "anything")
 
 
+def test_the_guard_treats_forty_and_forty_point_zero_as_one_figure():
+    """Rejecting "£40" for evidence reading "£40.00" would throw away good
+    narrations over formatting. The strictness that matters is the currency."""
+    assert not narrate.invents_figures("It is £40 over.", "£40.00 over budget")
+    assert not narrate.invents_figures("It is £40.00 over.", "£40 over budget")
+
+
+def test_a_narration_that_swaps_the_currency_is_dropped():
+    """Observed for real: llama3.2 rewrote GBP evidence in dollars. The digits
+    survive that, so `invents_figures` cannot see it -- but the sentence is
+    still a wrong figure on a screen whose whole premise is derived money."""
+    i = an_insight()
+    fake = FakeNarrator({0: "Groceries came in $40.00 above the usual $100.00."})
+    assert narrate.narrate_all([i], narrator=fake) == {}
+    assert narrate.redenominates("$40.00 over", "£40.00 over")
+
+
+def test_a_count_the_model_turns_into_money_is_dropped():
+    """The measured failure: "the holiday needs $14.00 more", where 14 was a
+    number of months. Every digit in it came from the brief, so only asking
+    whether a currency is attached to a figure the evidence denominated can
+    catch it -- and it must catch it in the right currency too."""
+    brief = "Holiday is 14 months away. Evidence -- Target: £2,000.00; Saved: £150.00."
+    assert narrate.redenominates("The holiday needs £14.00 more.", brief)
+    assert narrate.redenominates("The holiday needs $14.00 more.", brief)
+    kept = "The holiday is 14 months off; £150.00 saved."
+    assert not narrate.redenominates(kept, brief)
+
+
+def test_writing_an_amount_in_words_is_not_a_currency_swap():
+    """"40 pounds" is "£40.00" said differently, and rewriting an observation
+    in plain English is the entire point of the feature."""
+    assert not narrate.redenominates("Groceries ran 40 pounds over.", "£40.00 over")
+    assert narrate.redenominates("Groceries ran 40 dollars over.", "£40.00 over")
+
+
+def test_a_currency_the_evidence_never_used_is_dropped_even_with_no_figures():
+    assert narrate.redenominates("It is priced in USD.", "£40.00 over")
+
+
+def test_fabricates_names_which_rule_rejected_the_sentence():
+    """The log line has to say why, or a dead feature looks like an idle one."""
+    assert narrate.fabricates("Groceries are £999.00 over.", "£40.00 over")
+    assert narrate.fabricates("Groceries are $40.00 over.", "£40.00 over")
+    assert narrate.fabricates("Groceries are £40.00 over.", "£40.00 over") is None
+
+
 def test_a_failing_narrator_propagates_to_its_own_caller():
     """No try/except inside narrate_all itself -- matches enrichment.resolve
     and canonical.resolve, which push resilience to the concrete
@@ -181,6 +228,32 @@ def test_the_old_index_keyed_shape_is_no_longer_accepted():
     assert narrate._parse('{"0": "Hello"}', count=1) == {}
 
 
+def test_a_reply_with_a_prose_preamble_is_read():
+    """The common llama3.2 shape. Failing on it killed the feature outright,
+    and JSON mode cannot be relied on to prevent it -- not every server that
+    speaks this API honours the field."""
+    reply = 'Here is the JSON:\n{"sentences": ["Hello"]}'
+    assert narrate._parse(reply, 1) == {0: "Hello"}
+
+
+def test_trailing_commentary_after_the_object_is_ignored():
+    assert narrate._parse(
+        '{"sentences": ["Hello"]}\n\nLet me know if you want another tone.', 1
+    ) == {0: "Hello"}
+
+
+def test_a_preamble_around_a_fenced_reply_is_read():
+    assert narrate._parse(
+        'Sure! Here you go:\n```json\n{"sentences": ["Hello"]}\n```\nHope that helps.', 1
+    ) == {0: "Hello"}
+
+
+def test_a_brace_inside_a_sentence_does_not_truncate_the_object():
+    """Counting braces without tracking strings would end the object early and
+    drop a reply that was perfectly good."""
+    assert narrate._parse('{"sentences": ["A } brace"]}', 1) == {0: "A } brace"}
+
+
 def test_an_empty_string_answer_is_dropped():
     assert narrate._parse('{"sentences": [""]}', count=1) == {}
 
@@ -190,6 +263,67 @@ def test_an_unparseable_reply_is_empty_not_an_exception():
     assert narrate._parse("", count=1) == {}
     assert narrate._parse("[1, 2, 3]", count=1) == {}
     assert narrate._parse('{"other": ["A"]}', count=1) == {}
+
+
+# --------------------------------------------------------------------------
+# The prompt, and how the request is made
+# --------------------------------------------------------------------------
+
+
+def test_the_prompt_never_calls_the_key_a_number():
+    """The word "number" bound to the currency figures inside the brief rather
+    than to an item's position, so every reply came back keyed on money and
+    was discarded. An ordered array needs no key at all."""
+    prompt = narrate._prompt(["Groceries is £40.00 above the usual £100.00."])
+    shape = next(line for line in prompt.splitlines() if line.startswith('{"'))
+    assert shape == '{"sentences": [<one string per observation>]}'
+    assert "number" not in shape.lower()
+
+
+def test_the_prompt_states_how_many_sentences_are_wanted():
+    """One observation, one sentence. A worked example carrying two array slots
+    was enough for llama3.2 to return two sentences for a single observation,
+    every time -- it copies the example's shape rather than counting."""
+    one_line = " ".join(narrate._prompt(["only one"]).split())
+    assert "exactly 1 string(s)" in one_line
+    assert "never split one into two" in one_line
+    assert "exactly 3 string(s)" in " ".join(narrate._prompt(["a", "b", "c"]).split())
+
+
+def test_the_request_asks_the_server_for_json_mode(monkeypatch):
+    """Every reply here is consumed as JSON, so this is a call site that opts
+    in. It is a hint, not a contract -- hence the parser's tolerance above."""
+    sent = {}
+
+    def fake_chat(**kwargs):
+        sent.update(kwargs)
+        return '{"sentences": ["Hello"]}'
+
+    monkeypatch.setattr(narrate.providers, "chat", fake_chat)
+    narrator = narrate.OpenAICompatibleNarrator("http://x/v1", "", "llama3.2", 256)
+    assert narrator.narrate(["one observation"]) == {0: "Hello"}
+    assert sent["json_object"] is True
+
+
+def test_a_provider_error_narrates_nothing_rather_than_failing(monkeypatch):
+    def explode(**kwargs):
+        raise narrate.providers.ProviderError("connection refused")
+
+    monkeypatch.setattr(narrate.providers, "chat", explode)
+    narrator = narrate.OpenAICompatibleNarrator("http://x/v1", "", "llama3.2", 256)
+    assert narrator.narrate(["one observation"]) == {}
+
+
+def test_no_provider_asks_the_server_nothing_at_all(monkeypatch):
+    """A3, at the only level that matters: not one packet."""
+    from app.config import settings
+
+    def forbidden(**kwargs):  # pragma: no cover -- the assertion is that it never runs
+        raise AssertionError("A3: no provider must mean no call")
+
+    monkeypatch.setattr(narrate.providers, "chat", forbidden)
+    monkeypatch.setattr(settings, "llm_provider", "none")
+    assert narrate.narrate_all([an_insight()]) == {}
 
 
 # --------------------------------------------------------------------------

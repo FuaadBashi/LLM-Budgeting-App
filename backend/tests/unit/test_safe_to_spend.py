@@ -297,6 +297,7 @@ def test_O1_fulfilled_obligation_is_no_longer_committed(
         [(accounts["current"], "-600"), (accounts["groceries"], "600")],
     )
     inst.fulfilled_by_transaction_id = txn.id
+    inst.match_confirmed = True
     session.commit()
 
     r = compute_safe_to_spend(session, TODAY)
@@ -320,6 +321,7 @@ def test_O1_future_dated_fulfilment_still_counts_as_committed(
         [(accounts["current"], "-600"), (accounts["groceries"], "600")],
     )
     inst.fulfilled_by_transaction_id = txn.id
+    inst.match_confirmed = True
     session.commit()
 
     r = compute_safe_to_spend(session, TODAY)

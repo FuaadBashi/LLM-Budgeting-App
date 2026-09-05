@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.domain.money import ZERO
+from app.domain.obligation_scope import unresolved
 from app.domain.periods import Period
 from app.models.enums import BudgetPeriod
 from app.models.ledger import Posting, Transaction
@@ -58,7 +59,10 @@ def _obligation_linked_spend(
     """Spend inside the period already matched to a known obligation.
 
     Excluded from the run rate: a bill that was always going to land is not
-    evidence of a daily spending habit.
+    evidence of a daily spending habit. Whether a person has confirmed the link
+    is beside that question, so ``match_confirmed`` is not read here -- gating on
+    it left the bill inside the run rate, which then extrapolated a one-off rent
+    payment across every remaining day of the month.
     """
     q = (
         select(func.coalesce(func.sum(Posting.amount), ZERO))
@@ -80,16 +84,20 @@ def _obligation_linked_spend(
 def _committed_remaining(
     session: Session, p: Period, today: date, category_ids: set[uuid.UUID] | None
 ) -> Decimal:
-    """Unfulfilled obligations still due before the period ends.
+    """Unresolved obligations still due before the period ends.
 
     Known exactly, so they are added rather than extrapolated. The window is
     ``(today, end]`` -- strictly after today, because anything due today has
     either posted already (and is in Spent) or is counted once here.
+
+    An unconfirmed automatic link stays committed. Its linked spend is removed
+    from the daily run rate above, so the conservative reserve does not also get
+    extrapolated across the rest of the period.
     """
     q = (
         select(func.coalesce(func.sum(ObligationInstance.amount), ZERO))
         .join(FutureObligation, ObligationInstance.obligation_id == FutureObligation.id)
-        .where(ObligationInstance.fulfilled_by_transaction_id.is_(None))
+        .where(unresolved())
         .where(ObligationInstance.due_date > today)
         .where(ObligationInstance.due_date <= p.end)
         .where(FutureObligation.active.is_(True))

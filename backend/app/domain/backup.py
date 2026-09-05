@@ -11,8 +11,9 @@ Three rules, each with a test:
   the export format is one that restore has never actually been tried against.
 * **B-B — a backup file is a valid restore input.** Round-tripped in the suite,
   not assumed. A backup you have not restored is a file, not a backup.
-* **B-C — backups carry ledger data only.** No password hash, no session secret,
-  no configuration. A backup gets copied to places the database never goes.
+* **B-C — backups carry application data only.** No password hash, no session
+  secret, no configuration. A backup gets copied to places the database never
+  goes.
 
 Writes are atomic: a temporary file renamed into place, so a process killed
 mid-write leaves the previous backup intact rather than a truncated JSON file
@@ -21,19 +22,67 @@ that looks like a backup until the day it is needed.
 
 from __future__ import annotations
 
+import enum
 import json
 import os
 import re
 import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.clock import now as utc_now, today as clock_today
+from app.models import Base
 from app.models.ledger import Account, Category, Transaction
+
+BACKUP_TABLES = (
+    "categories",
+    "accounts",
+    "transactions",
+    "postings",
+    "user_profile",
+    "budgets",
+    "budget_revisions",
+    "savings_goals",
+    "goal_contributions",
+    "future_obligations",
+    "obligation_instances",
+    "expected_income",
+    "scenarios",
+    "merchant_suggestions",
+    "import_batches",
+    "import_candidates",
+)
+
+
+def _json_value(value):
+    """Encode database-native values without passing through a float."""
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, enum.Enum):
+        return value.value
+    return value
+
+
+def _table_rows(session: Session, name: str) -> list[dict]:
+    table = Base.metadata.tables[name]
+    primary = list(table.primary_key.columns)
+    stmt = select(table)
+    if primary:
+        stmt = stmt.order_by(*primary)
+    return [
+        {column.name: _json_value(row._mapping[column]) for column in table.columns}
+        for row in session.execute(stmt)
+    ]
 
 #: `backup-20260831T142530Z.json`. Sorts chronologically as text, which is why
 #: the timestamp is ISO-ordered and not a local format.
@@ -74,7 +123,7 @@ class BackupStatus:
 
 
 def build_payload(session: Session) -> dict:
-    """The full ledger, as the backup format.
+    """All durable user data, as the backup format.
 
     B-A: this is the single serialisation. `/export/backup.json` returns exactly
     this, and a scheduled backup writes exactly this.
@@ -83,14 +132,14 @@ def build_payload(session: Session) -> dict:
     as numbers would round-trip through a float and quietly change the figures a
     backup exists to preserve.
 
-    B-C: ledger tables only. Nothing from configuration or `.env` appears here,
-    because a backup ends up in places the database never does.
+    B-C: application tables only. Nothing from configuration or `.env` appears
+    here, because a backup ends up in places the database never does.
     """
     # Every column an account actually carries. The three optional ones are here
     # because a restore that silently dropped them would lose settings without
     # moving a balance -- so X17 would still pass while the file stopped being a
-    # faithful copy. Added as optional keys rather than a format bump: a version 1
-    # file simply lacks them, and `restore` reads them with `.get`.
+    # faithful copy. They remain optional in the human-readable preview so old
+    # version 1 files stay importable; version 2's table snapshot is lossless.
     accounts = [
         {
             "id": str(a.id),
@@ -146,11 +195,13 @@ def build_payload(session: Session) -> dict:
 
     return {
         "format": "personal-finance-os/backup",
-        "version": 1,
+        "version": 2,
         "exported_for": clock_today(session).isoformat(),
+        # Human-readable restore preview. Version 2 restores from `tables`.
         "accounts": accounts,
         "categories": categories,
         "transactions": transactions,
+        "tables": {name: _table_rows(session, name) for name in BACKUP_TABLES},
     }
 
 

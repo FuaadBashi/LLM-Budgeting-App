@@ -137,6 +137,7 @@ class OpenAICompatibleSuggester:
                 model=self.model,
                 prompt=prompt,
                 max_tokens=self._max_tokens,
+                json_object=True,
             )
         except providers.ProviderError as exc:
             log.warning("suggestion request failed: %s", exc)
@@ -153,6 +154,7 @@ class OpenAICompatibleSuggester:
                 model=self.model,
                 prompt=_verify_prompt(picks),
                 max_tokens=self._max_tokens,
+                json_object=True,
             )
         except providers.ProviderError as exc:
             log.warning("verification request failed: %s", exc)

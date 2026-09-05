@@ -32,30 +32,33 @@ export function TriageDeck({
   onDecline: (row: ImportCandidate) => Promise<void>;
   onExit: () => void;
 }) {
-  const [index, setIndex] = useState(0);
+  const [decided, setDecided] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(0);
   const startX = useRef<number | null>(null);
 
-  const row = candidates[index];
-  const done = index >= candidates.length;
+  const remaining = candidates.filter((candidate) => !decided.has(candidate.id));
+  const row = remaining[0];
+  const done = row === undefined;
 
   const expense = accounts.filter((a) => a.kind === "expense");
   const income = accounts.filter((a) => a.kind === "income_source");
   const counters = row && row.amount_minor < 0 ? expense : income;
 
-  const [account, setAccount] = useState("");
-  const [category, setCategory] = useState("");
+  const [choices, setChoices] = useState<
+    Record<string, { account: string; category: string }>
+  >({});
+  const choice = row ? choices[row.id] : undefined;
+  const account = choice?.account ?? counters[0]?.id ?? "";
+  const category = choice?.category ?? row?.suggested_category_id ?? "";
 
-  // Re-seed per card rather than per render: the suggestion is the default, and
-  // a choice made on the previous card must not leak onto this one.
-  useEffect(() => {
+  function updateChoice(next: Partial<{ account: string; category: string }>) {
     if (!row) return;
-    const list = row.amount_minor < 0 ? expense : income;
-    setAccount(list[0]?.id ?? "");
-    setCategory(row.suggested_category_id ?? "");
-    setDrag(0);
-  }, [row?.id]);
+    setChoices((prior) => ({
+      ...prior,
+      [row.id]: { account, category, ...next },
+    }));
+  }
 
   async function decide(accepted: boolean) {
     if (!row || busy) return;
@@ -64,7 +67,10 @@ export function TriageDeck({
     try {
       if (accepted) await onAccept(row, account, category || null);
       else await onDecline(row);
-      setIndex((i) => i + 1);
+      setDecided((prior) => new Set(prior).add(row.id));
+    } catch {
+      // The parent owns the visible error. Keeping this card is the important
+      // local consequence: a failed ledger write must never look decided.
     } finally {
       setBusy(false);
       setDrag(0);
@@ -76,6 +82,11 @@ export function TriageDeck({
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (done || busy) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest("input, select, textarea, button, a, [contenteditable='true']")
+      ) return;
       if (e.key === "ArrowRight") { e.preventDefault(); decide(true); }
       if (e.key === "ArrowLeft") { e.preventDefault(); decide(false); }
       if (e.key === "Escape") onExit();
@@ -107,7 +118,7 @@ export function TriageDeck({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between text-xs" style={{ color: "var(--text-muted)" }}>
-        <span>{index + 1} of {candidates.length}</span>
+        <span>{remaining.length} remaining</span>
         <button type="button" onClick={onExit} style={{ color: "var(--text-muted)" }}>
           Back to the list
         </button>
@@ -154,7 +165,7 @@ export function TriageDeck({
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <label className="text-xs" style={{ color: "var(--text-muted)" }}>
             <span className="mb-1 block">{row.amount_minor < 0 ? "Spent on" : "Income from"}</span>
-            <select value={account} onChange={(e) => setAccount(e.target.value)} className="form-control py-1.5 text-sm">
+            <select value={account} onChange={(e) => updateChoice({ account: e.target.value })} className="form-control py-1.5 text-sm">
               {counters.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </label>
@@ -165,7 +176,7 @@ export function TriageDeck({
                 <span className="ml-1.5" style={{ color: "var(--series-1)" }}>suggested</span>
               )}
             </span>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className="form-control py-1.5 text-sm">
+            <select value={category} onChange={(e) => updateChoice({ category: e.target.value })} className="form-control py-1.5 text-sm">
               <option value="">Uncategorised</option>
               {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>

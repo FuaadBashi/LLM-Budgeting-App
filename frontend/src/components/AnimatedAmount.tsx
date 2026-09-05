@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDesign } from "@/lib/design";
 import { formatMinor, type Minor } from "@/lib/money";
 
@@ -18,34 +18,24 @@ import { formatMinor, type Minor } from "@/lib/money";
  */
 export function AnimatedAmount({ minor, className = "tnum" }: { minor: Minor; className?: string }) {
   const { design } = useDesign();
-  const [display, setDisplay] = useState<Minor>(minor);
-  const prevTarget = useRef<Minor | null>(null);
+  const [display, setDisplay] = useState<Minor>(0);
+  const prevTarget = useRef<Minor>(0);
   const frame = useRef(0);
-
-  useLayoutEffect(() => {
-    if (design !== "noir" || reducedMotion()) return;
-    prevTarget.current = 0;
-    setDisplay(0);
-    // Only the mount case needs the pre-paint drop to zero; later updates
-    // are handled by the effect below, which already has a committed value
-    // on screen and so has no flash to avoid.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     cancelAnimationFrame(frame.current);
 
     if (design !== "noir" || reducedMotion()) {
       prevTarget.current = minor;
-      setDisplay(minor);
-      return;
+      frame.current = requestAnimationFrame(() => setDisplay(minor));
+      return () => cancelAnimationFrame(frame.current);
     }
 
-    const from = prevTarget.current ?? minor;
+    const from = prevTarget.current;
     prevTarget.current = minor;
     if (from === minor) {
-      setDisplay(minor);
-      return;
+      frame.current = requestAnimationFrame(() => setDisplay(minor));
+      return () => cancelAnimationFrame(frame.current);
     }
 
     const duration = 680;
@@ -60,7 +50,8 @@ export function AnimatedAmount({ minor, className = "tnum" }: { minor: Minor; cl
     return () => cancelAnimationFrame(frame.current);
   }, [minor, design]);
 
-  return <span className={className}>{formatMinor(display)}</span>;
+  const shown = design === "noir" ? display : minor;
+  return <span className={className}>{formatMinor(shown)}</span>;
 }
 
 function reducedMotion(): boolean {

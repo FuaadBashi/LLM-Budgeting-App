@@ -242,7 +242,8 @@ class ObligationInstance(TimestampedUUID, Base):
     fulfilled_by_transaction_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("transactions.id"), nullable=True
     )
-    # Auto-matches stay unconfirmed until the user accepts them.
+    # Auto-matches stay unconfirmed until the user accepts them. A wrong match
+    # must not remove a real commitment from the forecast.
     match_confirmed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
@@ -255,7 +256,7 @@ class ObligationInstance(TimestampedUUID, Base):
 
     @property
     def fulfilled(self) -> bool:
-        return self.fulfilled_by_transaction_id is not None
+        return self.fulfilled_by_transaction_id is not None and self.match_confirmed
 
 
 class ExpectedIncome(TimestampedUUID, Base):

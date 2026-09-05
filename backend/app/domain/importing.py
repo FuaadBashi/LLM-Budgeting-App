@@ -352,6 +352,7 @@ class OpenAICompatibleDuplicateChecker:
                 model=self.model,
                 prompt=_duplicate_prompt(briefs),
                 max_tokens=self._max_tokens,
+                json_object=True,
             )
         except providers.ProviderError as exc:
             log.warning("duplicate check request failed: %s", exc)
@@ -447,7 +448,10 @@ def classify_duplicates(
     # Rows already staged from a previous upload count too: two overlapping
     # statements should not produce two pending copies of the same payment.
     staged = session.scalars(
-        select(ImportCandidate).where(
+        select(ImportCandidate)
+        .join(ImportBatch, ImportCandidate.batch_id == ImportBatch.id)
+        .where(
+            ImportBatch.account_id == account_id,
             ImportCandidate.status.in_(
                 [CandidateStatus.PENDING, CandidateStatus.ACCEPTED]
             ),
@@ -529,7 +533,14 @@ def classify_duplicates(
 
 
 def stage(
-    session: Session, *, filename: str, content: str, account_id
+    session: Session,
+    *,
+    filename: str,
+    content: str,
+    account_id,
+    enrich: bool = True,
+    model_features: bool = True,
+    duplicate_checker: DuplicateChecker | None = None,
 ) -> ImportBatch:
     """Parse a file into candidates. Writes nothing to the ledger.
 
@@ -557,7 +568,9 @@ def stage(
         )
 
     profile, rows = parse(content)
-    verdicts = classify_duplicates(session, account_id, rows)
+    verdicts = classify_duplicates(
+        session, account_id, rows, duplicate_checker=duplicate_checker
+    )
 
     batch = ImportBatch(
         filename=filename,
@@ -592,57 +605,8 @@ def stage(
 
     session.flush()
 
-    # Category suggestions, cache first. Imported lazily because `enrichment`
-    # depends on this module's `normalise_description`. A failure here must not
-    # fail an import -- a staged row with no suggestion is the normal case, and
-    # with no API key it is the only case (A3).
-    try:
-        from app.domain import enrichment
-
-        flagged: dict[str, str] = {}
-        suggestions = enrichment.resolve(
-            session, [row.description for row in rows], flagged=flagged
-        )
-        for row in rows:
-            key = normalise_description(row.description)
-            candidate = by_row[row.row_number]
-            category_id = suggestions.get(key)
-            if category_id is not None:
-                candidate.suggested_category_id = category_id
-            # A second opinion disagreed with the first guess -- worth a
-            # person's eye this run, not just a silently blank category.
-            if key in flagged:
-                candidate.raw = {
-                    **candidate.raw,
-                    "verification_note": (
-                        f"A second look didn't agree this was {flagged[key]}."
-                    ),
-                }
-    except Exception as exc:  # noqa: BLE001
-        import logging
-
-        logging.getLogger("uvicorn.error").warning(
-            "category suggestion skipped: %s", exc
-        )
-
-    # Tidied display names, same cache-first shape, same "never fail the
-    # import" rule. Decoration only -- description stays the raw bank text.
-    try:
-        from app.domain import canonical
-
-        names = canonical.resolve(session, [row.description for row in rows])
-        for row in rows:
-            key = normalise_description(row.description)
-            name = names.get(key)
-            if name:
-                candidate = by_row[row.row_number]
-                candidate.raw = {**candidate.raw, "canonical_name": name}
-    except Exception as exc:  # noqa: BLE001
-        import logging
-
-        logging.getLogger("uvicorn.error").warning(
-            "canonical name lookup skipped: %s", exc
-        )
+    if enrich:
+        enrich_batch(session, batch.id, use_models=model_features)
 
     # Intra-file duplicates are resolved after the flush, when the earlier row
     # has an id to point at.
@@ -657,6 +621,76 @@ def stage(
     session.commit()
     session.refresh(batch)
     return batch
+
+
+def enrich_batch(session: Session, batch_id, *, use_models: bool = True) -> None:
+    """Add optional category and merchant decoration after staging is durable.
+
+    This function is safe to run as a post-response background task. A model
+    outage can leave suggestions blank, but can never roll back or delay the
+    candidate rows a person needs to review.
+    """
+    candidates = list(
+        session.scalars(
+            select(ImportCandidate).where(ImportCandidate.batch_id == batch_id)
+        )
+    )
+    if not candidates:
+        return
+
+    descriptions = [candidate.description for candidate in candidates]
+    try:
+        from app.domain import enrichment
+
+        flagged: dict[str, str] = {}
+        suggestions = enrichment.resolve(
+            session,
+            descriptions,
+            flagged=flagged,
+            suggester=None if use_models else enrichment.NullSuggester(),
+        )
+        for candidate in candidates:
+            key = normalise_description(candidate.description)
+            category_id = suggestions.get(key)
+            if category_id is not None:
+                candidate.suggested_category_id = category_id
+            # A second opinion disagreed with the first guess -- worth a
+            # person's eye this run, not just a silently blank category.
+            if key in flagged:
+                existing = candidate.raw.get("verification_note") or ""
+                note = f"A second look didn't agree this was {flagged[key]}."
+                candidate.raw = {
+                    **candidate.raw,
+                    "verification_note": f"{existing} {note}".strip(),
+                }
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("uvicorn.error").warning(
+            "category suggestion skipped: %s", exc
+        )
+
+    try:
+        from app.domain import canonical
+
+        names = canonical.resolve(
+            session,
+            descriptions,
+            canonicalizer=None if use_models else canonical.NullCanonicalizer(),
+        )
+        for candidate in candidates:
+            key = normalise_description(candidate.description)
+            name = names.get(key)
+            if name:
+                candidate.raw = {**candidate.raw, "canonical_name": name}
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("uvicorn.error").warning(
+            "canonical name lookup skipped: %s", exc
+        )
+
+    session.commit()
 
 
 def accept(

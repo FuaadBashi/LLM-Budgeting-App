@@ -25,15 +25,18 @@ from decimal import Decimal, InvalidOperation
 
 import warnings
 
-from sqlalchemy import func, select, text
+from sqlalchemy import Date, DateTime, Numeric, Uuid, func, select, text
 from sqlalchemy.exc import SAWarning
 from sqlalchemy.orm import Session
 
+from app.domain.backup import BACKUP_TABLES
+from app.models import Base
 from app.models.enums import AccountKind, CategoryNature, TransactionStatus
 from app.models.ledger import Account, Category, Posting, Transaction
 
 SUPPORTED_FORMAT = "personal-finance-os/backup"
-SUPPORTED_VERSION = 1
+SUPPORTED_VERSION = 2
+LEGACY_VERSION = 1
 
 #: Order matters: children before parents.
 LEDGER_TABLES = ["postings", "transactions", "categories", "accounts"]
@@ -74,7 +77,7 @@ def validate(payload: dict) -> None:
         raise RestoreError(
             f"unrecognised format {payload.get('format')!r}; expected {SUPPORTED_FORMAT!r}"
         )
-    if payload.get("version") != SUPPORTED_VERSION:
+    if payload.get("version") not in (LEGACY_VERSION, SUPPORTED_VERSION):
         raise RestoreError(
             f"unsupported backup version {payload.get('version')!r}"
         )
@@ -82,10 +85,33 @@ def validate(payload: dict) -> None:
         if not isinstance(_require(payload, key), list):
             raise RestoreError(f"'{key}' must be a list")
 
+    if payload.get("version") == SUPPORTED_VERSION:
+        tables = _require(payload, "tables")
+        if not isinstance(tables, dict):
+            raise RestoreError("'tables' must be an object")
+        missing = [
+            name for name in BACKUP_TABLES if not isinstance(tables.get(name), list)
+        ]
+        if missing:
+            raise RestoreError(
+                f"backup tables are missing or invalid: {', '.join(missing)}"
+            )
+
     # Every posting must balance before a single row is written -- restoring a
     # file that violates L1 would fail at commit with the whole batch already
     # built, and the error would name a trigger rather than the bad record.
-    for txn in payload["transactions"]:
+    if payload.get("version") == SUPPORTED_VERSION:
+        grouped: dict[str, list[dict]] = {}
+        for posting in payload["tables"]["postings"]:
+            grouped.setdefault(str(posting.get("transaction_id")), []).append(posting)
+        transactions = [
+            {"id": row.get("id"), "postings": grouped.get(str(row.get("id")), [])}
+            for row in payload["tables"]["transactions"]
+        ]
+    else:
+        transactions = payload["transactions"]
+
+    for txn in transactions:
         postings = txn.get("postings") or []
         if len(postings) < 2:
             raise RestoreError(
@@ -102,25 +128,47 @@ def validate(payload: dict) -> None:
 
 
 def is_empty(session: Session) -> bool:
-    return (session.scalar(select(func.count()).select_from(Transaction)) or 0) == 0
+    """Whether restore can insert without overwriting any durable app data."""
+    return all(
+        (session.scalar(select(func.count()).select_from(Base.metadata.tables[name])) or 0)
+        == 0
+        for name in BACKUP_TABLES
+    )
+
+
+def _has_nonledger_data(session: Session) -> bool:
+    return any(
+        (session.scalar(select(func.count()).select_from(Base.metadata.tables[name])) or 0)
+        > 0
+        for name in BACKUP_TABLES
+        if name not in LEDGER_TABLES
+    )
 
 
 def restore(session: Session, payload: dict, replace: bool = False) -> RestoreResult:
     """Rebuild the ledger from ``payload``.
 
     Raises before any write if the file is malformed, or if the database already
-    holds transactions and ``replace`` was not requested.
+    holds durable application data and ``replace`` was not requested.
     """
     validate(payload)
 
     if not is_empty(session) and not replace:
         raise RestoreError(
-            "database already contains transactions; pass replace=true to overwrite"
+            "database already contains finance data; pass replace=true to overwrite"
+        )
+
+    if replace and payload.get("version") == LEGACY_VERSION and _has_nonledger_data(session):
+        raise RestoreError(
+            "version 1 contains ledger data only and cannot replace a database "
+            "with planning or import data; create a version 2 backup first"
         )
 
     if replace:
-        joined = ", ".join(f'"{t}"' for t in LEDGER_TABLES)
-        session.execute(text(f"TRUNCATE {joined} RESTART IDENTITY CASCADE"))
+        # No CASCADE: if a future FK table is omitted from BACKUP_TABLES this
+        # fails loudly rather than silently deleting data the file cannot restore.
+        joined = ", ".join(f'"{t}"' for t in BACKUP_TABLES)
+        session.execute(text(f"TRUNCATE {joined} RESTART IDENTITY"))
         # TRUNCATE is invisible to the identity map, so the session still holds
         # the rows it just deleted. Re-adding the same ids would then collide
         # with stale objects instead of inserting cleanly.
@@ -131,7 +179,72 @@ def restore(session: Session, payload: dict, replace: bool = False) -> RestoreRe
     # Expected here, and only here.
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=SAWarning)
+        if payload.get("version") == SUPPORTED_VERSION:
+            return _apply_v2(session, payload)
         return _apply(session, payload)
+
+
+def _decoded(column, value):
+    if value is None:
+        return None
+    if isinstance(column.type, DateTime):
+        return datetime.fromisoformat(value)
+    if isinstance(column.type, Date):
+        return date.fromisoformat(value)
+    if isinstance(column.type, Numeric):
+        return _decimal(value, column.name)
+    if isinstance(column.type, Uuid):
+        return uuid.UUID(value)
+    return value
+
+
+def _apply_v2(session: Session, payload: dict) -> RestoreResult:
+    tables = payload["tables"]
+    deferred = {
+        "categories": ("parent_id",),
+        "transactions": ("reverses_id", "reimburses_id"),
+        "import_candidates": ("duplicate_of_candidate_id",),
+    }
+
+    for name in BACKUP_TABLES:
+        table = Base.metadata.tables[name]
+        rows = []
+        for encoded in tables[name]:
+            row = {
+                column.name: _decoded(column, encoded.get(column.name))
+                for column in table.columns
+            }
+            for field in deferred.get(name, ()):
+                row[field] = None
+            rows.append(row)
+        if rows:
+            session.execute(table.insert(), rows)
+
+        for encoded in tables[name]:
+            values = {
+                field: _decoded(table.c[field], encoded.get(field))
+                for field in deferred.get(name, ())
+                if encoded.get(field) is not None
+            }
+            if values:
+                # SQLAlchemy's column-level onupdate would otherwise replace the
+                # historical timestamp merely because a self-FK needed a second pass.
+                if "updated_at" in table.c and encoded.get("updated_at") is not None:
+                    values["updated_at"] = _decoded(
+                        table.c.updated_at, encoded["updated_at"]
+                    )
+                row_id = _decoded(table.c.id, encoded["id"])
+                session.execute(
+                    table.update().where(table.c.id == row_id).values(**values)
+                )
+
+    session.commit()
+    return RestoreResult(
+        accounts=len(tables["accounts"]),
+        categories=len(tables["categories"]),
+        transactions=len(tables["transactions"]),
+        postings=len(tables["postings"]),
+    )
 
 
 def _apply(session: Session, payload: dict) -> RestoreResult:

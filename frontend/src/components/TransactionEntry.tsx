@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
@@ -366,9 +366,11 @@ export function TransactionEntry({
  * silently break. Leaving the layer entirely is the fix that keeps working.
  */
 function Overlay({ children }: { children: ReactNode }) {
-  const [mounted, setMounted] = useState(false);
-  // document does not exist during the server render; portal only after hydration.
-  useEffect(() => setMounted(true), []);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
   if (!mounted) return null;
   return createPortal(children, document.body);
 }

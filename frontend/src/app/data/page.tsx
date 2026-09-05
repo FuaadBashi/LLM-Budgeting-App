@@ -4,9 +4,9 @@ import { DataManager } from "@/components/DataManager";
 import { requireSession } from "@/lib/guard";
 import {
   getBackupStatus,
-  getTransactions,
+  getRestoreStatus,
   type BackupStatus,
-  type Transaction,
+  type RestoreStatus,
 } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
@@ -17,12 +17,12 @@ export default async function DataPage() {
 
   // Whether the ledger is empty decides how loud the restore warning is, so it
   // is worth one request rather than assuming the destructive case.
-  let transactions: Transaction[] = [];
+  let restoreStatus: RestoreStatus | null = null;
   let backups: BackupStatus | null = null;
   let error: string | null = null;
   try {
-    [transactions, backups] = await Promise.all([
-      getTransactions(),
+    [restoreStatus, backups] = await Promise.all([
+      getRestoreStatus(),
       getBackupStatus(),
     ]);
   } catch (e) {
@@ -52,7 +52,7 @@ export default async function DataPage() {
         ) : (
           <>
             {backups && <BackupPanel status={backups} />}
-            <DataManager empty={transactions.length === 0} />
+            <DataManager empty={restoreStatus?.empty ?? false} />
           </>
         )}
       </main>

@@ -25,8 +25,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.disposable import account_balances
-from app.domain.money import ZERO
 from app.domain.income import occurrences as income_occurrences
+from app.domain.money import ZERO
+from app.domain.obligation_scope import unresolved
 from app.models.enums import LIQUID_KINDS
 from app.models.ledger import Account, Transaction
 from app.models.planning import (
@@ -97,11 +98,16 @@ def _expected_income_dates(
 def _committed_outflows(
     session: Session, start: date, end: date
 ) -> list[tuple[date, str, Decimal]]:
-    """Unfulfilled hard obligations due in the window.
+    """Hard obligations due in the window that are not confirmed paid.
 
-    Fulfilled instances are excluded (invariant O1): their money has already left,
-    or is about to via a posted transaction, and counting the obligation too would
-    take it out of the projection twice.
+    A linked instance is excluded (invariant O1) because its transaction is
+    already on this curve by one of two routes: a past booking date is inside
+    ``account_balances``, which is the opening balance, and a future one is added
+    by :func:`_future_posted`. Emitting the obligation as well would subtract the
+    same rent twice and invent a buffer breach that is not there.
+
+    An automatic link remains on the curve until confirmed. That may be briefly
+    conservative, but cannot turn a wrong suggestion into spendable cash.
     """
     rows = session.execute(
         select(
@@ -110,7 +116,7 @@ def _committed_outflows(
             ObligationInstance.amount,
         )
         .join(FutureObligation, ObligationInstance.obligation_id == FutureObligation.id)
-        .where(ObligationInstance.fulfilled_by_transaction_id.is_(None))
+        .where(unresolved())
         .where(ObligationInstance.due_date >= start)
         .where(ObligationInstance.due_date <= end)
         .where(FutureObligation.hard.is_(True))

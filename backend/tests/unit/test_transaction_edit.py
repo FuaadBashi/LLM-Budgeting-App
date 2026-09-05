@@ -420,6 +420,8 @@ def test_an_obligation_fulfilment_match_survives_an_edit(client, session, accoun
     assert match_instances(session, AUGUST).matched == 1
     session.refresh(instance)
     assert str(instance.fulfilled_by_transaction_id) == txn["id"]
+    instance.match_confirmed = True
+    session.commit()
 
     r = client.patch(
         f"/api/transactions/{txn['id']}",

@@ -40,25 +40,24 @@ function monthName(iso: string): string {
 export function ScenarioManager({ initial }: { initial: Scenario[] }) {
   const [scenarios, setScenarios] = useState(initial);
   const [selected, setSelected] = useState<string | null>(initial[0]?.id ?? null);
-  const [result, setResult] = useState<ScenarioResult | null>(null);
+  const [resultState, setResultState] = useState<{ id: string; value: ScenarioResult } | null>(null);
   const [against, setAgainst] = useState<string | null>(null);
-  const [rival, setRival] = useState<ScenarioResult | null>(null);
+  const [rivalState, setRivalState] = useState<{ key: string; value: ScenarioResult | null } | null>(null);
   const [open, setOpen] = useState(initial.length === 0);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const current = scenarios.find((s) => s.id === selected) ?? null;
+  const result = resultState?.id === selected ? resultState.value : null;
+  const comparisonKey = selected && against ? `${selected}:${against}` : null;
+  const rival = rivalState?.key === comparisonKey ? rivalState.value : null;
 
   useEffect(() => {
-    if (!selected) {
-      setResult(null);
-      return;
-    }
+    if (!selected) return;
     let live = true;
-    setError(null);
     getScenarioResult(selected)
-      .then((r) => live && setResult(r))
+      .then((r) => live && setResultState({ id: selected, value: r }))
       .catch((e) => live && setError(e instanceof Error ? e.message : "Could not run."));
     return () => {
       live = false;
@@ -66,16 +65,14 @@ export function ScenarioManager({ initial }: { initial: Scenario[] }) {
   }, [selected, scenarios]);
 
   useEffect(() => {
-    if (!selected || !against) {
-      setRival(null);
-      return;
-    }
+    if (!selected || !against) return;
+    const key = `${selected}:${against}`;
     let live = true;
     // Both sides are run in one request so they share a baseline — comparing two
     // results computed moments apart would blame the assumptions for a ledger change.
     compareScenarios([selected, against])
-      .then((rs) => live && setRival(rs[1] ?? null))
-      .catch(() => live && setRival(null));
+      .then((rs) => live && setRivalState({ key, value: rs[1] ?? null }))
+      .catch(() => live && setRivalState({ key, value: null }));
     return () => {
       live = false;
     };

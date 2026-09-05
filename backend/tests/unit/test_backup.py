@@ -2,7 +2,7 @@
 
 * B-A -- one serialisation, shared with `/export/backup.json`
 * B-B -- a backup file is a valid restore input
-* B-C -- backups carry ledger data only, never secrets
+* B-C -- backups carry application data only, never secrets
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from app.db import get_session
 from app.domain import backup, restore as restore_module
 from app.domain.disposable import account_balances, net_worth
 from app.main import app
+from app.models import Base
 from tests.conftest import post
 
 NOW = datetime(2026, 8, 31, 14, 25, 30, tzinfo=timezone.utc)
@@ -45,6 +46,11 @@ def ledger(session, accounts, categories):
 # --------------------------------------------------------------------------
 # B-A
 # --------------------------------------------------------------------------
+
+
+def test_every_persistent_application_table_is_in_the_backup_contract():
+    """A new table cannot quietly fall outside backup/restore."""
+    assert set(backup.BACKUP_TABLES) == set(Base.metadata.tables)
 
 
 def test_the_written_file_matches_the_export_endpoint_byte_for_byte(
@@ -96,7 +102,8 @@ def test_a_backup_contains_no_secrets(session, ledger, tmp_path, monkeypatch):
 
     payload = json.loads(text)
     assert set(payload) == {
-        "format", "version", "exported_for", "accounts", "categories", "transactions"
+        "format", "version", "exported_for", "accounts", "categories",
+        "transactions", "tables",
     }
 
 

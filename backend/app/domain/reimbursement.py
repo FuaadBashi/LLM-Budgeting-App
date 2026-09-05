@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.categories import scope_ids
 from app.domain.ledger_scope import posted_transaction_ids
-from app.models.enums import AccountKind, CategoryNature
+from app.models.enums import AccountKind, CategoryNature, TransactionStatus
 from app.models.ledger import Account, Category, Posting, Transaction
 
 ZERO = Decimal("0")
@@ -95,44 +95,66 @@ def _offsets(
     """
     ids = scope_ids(session, category_id)
 
+    # Read the whole history up to ``end``. Earlier repayments consume part of
+    # the original expense even when this report starts later; ignoring them
+    # lets two reimbursements each net the full purchase in different periods.
     reimbursements = session.scalars(
         select(Transaction)
         .where(Transaction.reimburses_id.is_not(None))
-        .where(Transaction.id.in_(posted_transaction_ids(start=start, end=end)))
+        .where(Transaction.id.in_(posted_transaction_ids(end=end)))
+        .order_by(Transaction.booking_date, Transaction.id)
     ).all()
 
     excess = ZERO
+    legs_by_original: dict[uuid.UUID, list[Posting]] = {}
+    remaining_by_leg: dict[uuid.UUID, Decimal] = {}
 
     for reimbursement in reimbursements:
+        in_window = start <= reimbursement.booking_date <= end
         repaid = _reimbursed_amount(session, reimbursement)
         if repaid <= ZERO:
             continue
 
         original = session.get(Transaction, reimbursement.reimburses_id)
-        if original is None:
-            excess += repaid
+        if original is None or original.status != TransactionStatus.POSTED:
+            if in_window:
+                excess += repaid
             continue
 
-        # Expense legs of the original, in a stable order so allocation is
-        # reproducible across runs.
-        legs: list[tuple[Posting, Decimal]] = []
-        for posting in sorted(original.postings, key=lambda p: str(p.id)):
-            account = session.get(Account, posting.account_id)
-            if account is not None and account.kind == AccountKind.EXPENSE and posting.amount > ZERO:
-                legs.append((posting, posting.amount))
+        # Expense legs and their remaining reimbursable balances. The mutable
+        # second slot is local working state, not ledger state.
+        legs = legs_by_original.get(original.id)
+        if legs is None:
+            legs = []
+            for posting in sorted(original.postings, key=lambda p: str(p.id)):
+                account = session.get(Account, posting.account_id)
+                if (
+                    account is not None
+                    and account.kind == AccountKind.EXPENSE
+                    and posting.amount > ZERO
+                ):
+                    legs.append(posting)
+                    remaining_by_leg[posting.id] = posting.amount
+            legs_by_original[original.id] = legs
 
         if not legs:
-            excess += repaid
+            if in_window:
+                excess += repaid
             continue
 
-        shares = allocate(repaid, [amount for _, amount in legs])
+        remaining_total = sum((remaining_by_leg[p.id] for p in legs), ZERO)
+        applicable = min(repaid, remaining_total)
+        shares = allocate(applicable, [remaining_by_leg[p.id] for p in legs])
+        if in_window:
+            excess += repaid - applicable
 
-        for (posting, leg_amount), share in zip(legs, shares):
-            # Cap per link: a single reimbursement can never push a category
-            # below zero spend.
-            applied = min(share, leg_amount)
-            excess += share - applied
+        for posting, share in zip(legs, shares):
+            remaining = remaining_by_leg[posting.id]
+            applied = min(share, remaining)
+            remaining_by_leg[posting.id] = remaining - applied
             if applied == ZERO:
+                continue
+            if not in_window:
                 continue
             if not _in_scope(session, posting, ids):
                 continue

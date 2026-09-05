@@ -47,12 +47,13 @@ person would actually want to read.
 STRICT RULES:
 - Use ONLY figures that already appear in the observation. Never introduce a
   number that is not there, and never turn a count into an amount of money.
-- Never change or convert a currency symbol.
+- Never change or convert a currency symbol, and never attach one to a number
+  that did not already have one: "14 months" is not "£14.00".
 - Do not add advice or any claim the observation does not make.
 
-There are {count} observation(s), so "sentences" must contain exactly {count}
-string(s), in the same order they are listed. Do not split one observation
-into several sentences.
+There are {count} observation(s). "sentences" must hold exactly {count} string(s),
+in the order the observations are listed. One observation is one sentence: never
+split one into two, never merge two into one.
 
 Reply with JSON only, in this shape:
 {{"sentences": [<one string per observation>]}}
@@ -68,6 +69,24 @@ Observations:
 #: checkable. Cheap, needs no second model call, and cannot itself be wrong
 #: in the dangerous direction: it only ever rejects.
 _FIGURE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+#: Word forms fold onto their symbol so that rewriting "£40.00" as "40 pounds"
+#: is not mistaken for a new currency, while "14 dollars" still is. Matching
+#: symbols alone would miss exactly the re-denomination this guards against.
+_CURRENCY_FORMS = {
+    "£": "£", "gbp": "£", "pound": "£", "pounds": "£", "sterling": "£",
+    "$": "$", "usd": "$", "dollar": "$", "dollars": "$",
+    "€": "€", "eur": "€", "euro": "€", "euros": "€",
+    "¥": "¥", "jpy": "¥", "yen": "¥",
+}
+_CURRENCY = r"[£$€¥]|\b(?:GBP|USD|EUR|JPY|pounds?|sterling|dollars?|euros?|yen)\b"
+_CURRENCY_RE = re.compile(_CURRENCY, re.IGNORECASE)
+#: A figure with a currency on either side of it. Both orders occur: models
+#: write "£40" and "40 GBP" interchangeably.
+_DENOMINATED = re.compile(
+    rf"(?:({_CURRENCY})\s?({_FIGURE.pattern}))|(?:({_FIGURE.pattern})\s?({_CURRENCY}))",
+    re.IGNORECASE,
+)
 
 
 class Narrator(Protocol):
@@ -96,6 +115,10 @@ class OpenAICompatibleNarrator:
                 model=self.model,
                 prompt=_prompt(briefs),
                 max_tokens=self._max_tokens,
+                # Every reply here is consumed as JSON, so ask the server to
+                # constrain it. A server that will not is retried without the
+                # field, which is why `_parse` still has to tolerate prose.
+                json_object=True,
             )
         except providers.ProviderError as exc:
             log.warning("narration request failed: %s", exc)
@@ -139,14 +162,103 @@ def _prompt(briefs: list[str]) -> str:
     return PROMPT.format(items=items, count=len(briefs))
 
 
+def _normalise(figure: str) -> str:
+    """2,000.00, 2000.00 and 2000 are one figure, not three.
+
+    Trailing zeros are dropped rather than kept strict, because "£40" for an
+    evidence line reading "£40.00" is the same money and rejecting it would
+    throw away good narrations. The strictness that matters lives in
+    `redenominates`, which checks what a figure is *denominated in*.
+    """
+    plain = figure.replace(",", "")
+    if "." in plain:
+        plain = plain.rstrip("0").rstrip(".")
+    return plain or "0"
+
+
 def figures(text: str) -> set[str]:
-    """Every numeric token in `text`, normalised so 2,000.00 == 2000.00."""
-    return {m.replace(",", "").rstrip(".") for m in _FIGURE.findall(text)}
+    """Every numeric token in `text`, normalised so 2,000.00 == 2000."""
+    return {_normalise(m) for m in _FIGURE.findall(text)}
+
+
+def currencies(text: str) -> set[str]:
+    """Every currency `text` names, as a symbol; word forms fold onto it."""
+    return {_CURRENCY_FORMS[m.lower()] for m in _CURRENCY_RE.findall(text)}
+
+
+def denominations(text: str) -> set[tuple[str, str]]:
+    """Every (currency, figure) pair `text` states, in either written order."""
+    out: set[tuple[str, str]] = set()
+    for before, after_fig, before_fig, after in _DENOMINATED.findall(text):
+        symbol, figure = (before, after_fig) if before else (after, before_fig)
+        out.add((_CURRENCY_FORMS[symbol.lower()], _normalise(figure)))
+    return out
 
 
 def invents_figures(narration: str, brief: str) -> bool:
     """True if the narration mentions a number the brief never did."""
     return bool(figures(narration) - figures(brief))
+
+
+def redenominates(narration: str, brief: str) -> bool:
+    """True if the narration puts money in terms the brief never used.
+
+    Two ways that happens, both observed against the local model. It names a
+    currency the evidence never carried -- "$14.00" where every figure in the
+    brief was in GBP. Or it attaches a currency to a figure the evidence had
+    but never denominated: the reply that read "the holiday needs $14.00 more"
+    took 14 from a count of *months*. `invents_figures` cannot see either,
+    because the digits really were there.
+    """
+    if currencies(narration) - currencies(brief):
+        return True
+    return bool(denominations(narration) - denominations(brief))
+
+
+def fabricates(narration: str, brief: str) -> str | None:
+    """Why this sentence must not be shown, or None if it is safe to show."""
+    if invents_figures(narration, brief):
+        return "a figure the evidence never contained"
+    if redenominates(narration, brief):
+        return "money in a currency or amount the evidence never stated"
+    return None
+
+
+def _json_object(text: str) -> str | None:
+    """The first complete JSON object in `text`, or None if there is none.
+
+    JSON mode is asked for but is only a hint -- see `providers.chat` -- so the
+    reply still arrives wrapped in whatever the model felt like saying. Fences
+    were already handled; a plain-prose preamble ("Here is the JSON:") was not,
+    and against llama3.2 it is the common shape, so the whole feature died on
+    it. Braces are counted rather than the last one searched for, because a
+    trailing "Let me know if..." after the object is just as common.
+    """
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth:
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+    return None
 
 
 def _parse(text: str, count: int) -> dict[int, str]:
@@ -158,13 +270,13 @@ def _parse(text: str, count: int) -> dict[int, str]:
     the wrong insight -- worse than showing none, because it would read as
     correct.
     """
-    body = text.strip()
-    if body.startswith("```"):
-        body = body.split("```")[1] if "```" in body[3:] else body[3:]
-        body = body.removeprefix("json").strip()
+    body = _json_object(text)
+    if body is None:
+        log.warning("could not parse narration reply")
+        return {}
     try:
         parsed = json.loads(body)
-    except (json.JSONDecodeError, IndexError):
+    except json.JSONDecodeError:
         log.warning("could not parse narration reply")
         return {}
     if not isinstance(parsed, dict):
@@ -243,10 +355,12 @@ def narrate_all(
     caller falls back to the insight's own `detail`, which is always a
     correct, complete sentence on its own.
 
-    Every candidate sentence passes the invented-figure guard before it is
-    returned. That check is not belt-and-braces: the model has been observed
-    turning a count of months into a sum of money, and this app's whole
-    premise is that a figure on screen came from the ledger.
+    Every candidate sentence passes the fabrication guard before it is
+    returned -- both halves of it, invented figures and re-denominated ones.
+    That check is not belt-and-braces: the model has been observed turning a
+    count of months into a sum of money, in the wrong currency, and this app's
+    whole premise is that a figure on screen came from the ledger. The prompt
+    asks for the same restraint, but a prompt is a request and this is not.
     """
     if not insights:
         return {}
@@ -259,11 +373,9 @@ def narrate_all(
     for index, sentence in by_index.items():
         if not (0 <= index < len(insights)):
             continue
-        if invents_figures(sentence, briefs[index]):
-            log.warning(
-                "narration invented a figure not in the evidence; dropped: %r",
-                sentence,
-            )
+        reason = fabricates(sentence, briefs[index])
+        if reason is not None:
+            log.warning("narration stated %s; dropped: %r", reason, sentence)
             continue
         out[insight_key(insights[index])] = sentence
     return out

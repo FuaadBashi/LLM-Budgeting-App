@@ -236,6 +236,60 @@ def test_over_repayment_is_capped_and_reported_as_excess(session, accounts):
     assert r.spent == Decimal("0")            # not -£50
 
 
+def test_multiple_repayments_share_one_cumulative_cap(session, accounts):
+    claims = claims_account(session)
+    trip = post(
+        session,
+        date(2026, 8, 10),
+        "Work trip",
+        [(accounts["current"], "-100"), (accounts["groceries"], "100")],
+    )
+    for when in (date(2026, 8, 20), date(2026, 8, 21)):
+        post(
+            session,
+            when,
+            "Repayment",
+            [(accounts["current"], "80"), (claims, "-80")],
+            reimburses_id=trip.id,
+        )
+
+    offsets, excess = netting_by_booking_date(session, None, START, END)
+    assert sum(v for _, v in offsets) == Decimal("100")
+    assert excess == Decimal("60")
+
+
+def test_an_earlier_period_repayment_consumes_the_later_period_cap(
+    session, accounts
+):
+    claims = claims_account(session)
+    trip = post(
+        session,
+        date(2026, 8, 10),
+        "Work trip",
+        [(accounts["current"], "-100"), (accounts["groceries"], "100")],
+    )
+    post(
+        session,
+        date(2026, 8, 20),
+        "First repayment",
+        [(accounts["current"], "80"), (claims, "-80")],
+        reimburses_id=trip.id,
+    )
+    post(
+        session,
+        date(2026, 9, 5),
+        "Second repayment",
+        [(accounts["current"], "80"), (claims, "-80")],
+        reimburses_id=trip.id,
+    )
+
+    offsets, excess = netting_by_booking_date(
+        session, None, date(2026, 9, 1), date(2026, 9, 30)
+    )
+    assert sum(v for _, v in offsets) == Decimal("20")
+    assert excess == Decimal("60")
+
+
 def test_netting_lands_in_the_reimbursements_own_period(session, accounts):
     """As-booked, like refunds: money back in September is September's news."""
     claims = claims_account(session)

@@ -227,6 +227,11 @@ def test_period_endpoint_breakdown_sums_to_net(client, month):
     assert sum(c["amount_minor"] for c in body["by_category"]) == body["expense_minor"]
 
 
+def test_period_endpoint_keeps_a_one_sided_date_bound(client, month):
+    body = client.get("/api/analytics/period?start=2026-08-10").json()
+    assert body["start"] == "2026-08-10"
+
+
 def test_analytics_endpoints_are_read_only(client):
     paths = client.get("/openapi.json").json()["paths"]
     for path, methods in paths.items():

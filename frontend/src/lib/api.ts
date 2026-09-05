@@ -266,6 +266,19 @@ export interface Obligation {
   active: boolean;
 }
 
+export interface ObligationInstance {
+  id: string;
+  obligation_id: string;
+  obligation_name: string;
+  due_date: string;
+  amount_minor: Minor;
+  fulfilled: boolean;
+  /** The transaction the matcher thinks paid this. Null means nothing found. */
+  fulfilled_by_transaction_id: string | null;
+  /** False means the link above is a suggestion nobody has accepted yet. */
+  match_confirmed: boolean;
+}
+
 export interface ScenarioAssumptions {
   monthly_income_minor: Minor;
   monthly_fixed_costs_minor: Minor;
@@ -639,6 +652,12 @@ export interface RestoreResult {
   postings: number;
 }
 
+export interface RestoreStatus {
+  empty: boolean;
+}
+
+export const getRestoreStatus = () => get<RestoreStatus>("/restore/status");
+
 /**
  * Fetch an export as a blob and save it.
  *
@@ -694,6 +713,26 @@ export async function deleteScenario(id: string): Promise<void> {
 export const getBudgetList = () => get<BudgetSummary[]>("/budgets");
 export const getObligations = () => get<Obligation[]>("/obligations");
 
+/**
+ * Dated instances of the commitments.
+ *
+ * The default omits anything already confirmed: what is left is the work —
+ * bills still outstanding, and matches the engine guessed at but nobody has
+ * accepted.
+ */
+export const getObligationInstances = (
+  until?: string,
+  includeFulfilled = false,
+) => {
+  const params = new URLSearchParams({ include_fulfilled: String(includeFulfilled) });
+  if (until) params.set("until", until);
+  return get<ObligationInstance[]>(`/obligations/instances?${params.toString()}`);
+};
+
+/** Accept a suggested match. 422 if the instance has no match to confirm. */
+export const confirmObligationMatch = (instanceId: string) =>
+  post<ObligationInstance>(`/obligations/instances/${instanceId}/confirm`, {});
+
 export const createGoal = (body: unknown) => post<Goal>("/goals", body);
 export const createBudget = (body: unknown) => post<BudgetSummary>("/budgets", body);
 export const createObligation = (body: unknown) => post<Obligation>("/obligations", body);
@@ -705,18 +744,19 @@ export const updateObligation = (id: string, body: unknown) =>
   patch<Obligation>(`/obligations/${id}`, body);
 export const updateAccount = (id: string, body: unknown) =>
   patch<Account>(`/accounts/${id}`, body);
+function dateQuery(firstName: string, first?: string, lastName?: string, last?: string) {
+  const params = new URLSearchParams();
+  if (first) params.set(firstName, first);
+  if (last && lastName) params.set(lastName, last);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
 export const getPeriodSummary = (start?: string, end?: string) =>
-  get<PeriodSummary>(
-    start && end ? `/analytics/period?start=${start}&end=${end}` : "/analytics/period",
-  );
+  get<PeriodSummary>(`/analytics/period${dateQuery("start", start, "end", end)}`);
 export const getMonthly = (first?: string, last?: string) =>
-  get<PeriodSummary[]>(
-    first && last ? `/analytics/monthly?first=${first}&last=${last}` : "/analytics/monthly",
-  );
+  get<PeriodSummary[]>(`/analytics/monthly${dateQuery("first", first, "last", last)}`);
 export const getAllocation = (start?: string, end?: string) =>
-  get<AllocationReport>(
-    start && end ? `/analytics/allocation?start=${start}&end=${end}` : "/analytics/allocation",
-  );
+  get<AllocationReport>(`/analytics/allocation${dateQuery("start", start, "end", end)}`);
 export interface TransactionFilters {
   q?: string;
   categoryId?: string;

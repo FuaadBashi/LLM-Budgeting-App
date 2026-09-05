@@ -11,11 +11,10 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.schemas import to_minor
 from app.db import get_session
@@ -116,14 +115,22 @@ def _get(session: Session, candidate_id: uuid.UUID) -> ImportCandidate:
     return candidate
 
 
+def _enrich_after_response(batch_id: uuid.UUID, bind) -> None:
+    """A fresh session for a Starlette background thread."""
+    factory = sessionmaker(bind=bind, expire_on_commit=False)
+    with factory() as background_session:
+        importing.enrich_batch(background_session, batch_id)
+
+
 @router.post("/import", response_model=BatchOut, status_code=201)
-async def upload_statement(
+def upload_statement(
+    background_tasks: BackgroundTasks,
     account_id: uuid.UUID = Form(...),
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ) -> BatchOut:
     """Parse a statement into candidates. Writes nothing to the ledger."""
-    payload = await file.read()
+    payload = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(payload) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "That file is larger than 10 MB.")
     try:
@@ -135,26 +142,21 @@ async def upload_statement(
         text = payload.decode("latin-1")
 
     try:
-        # Off the event loop. `stage` is synchronous and, with a provider
-        # configured, spends most of its time inside blocking httpx calls --
-        # a duplicate second-opinion, a categorisation pass, its verify pass
-        # and a canonical-name pass, each with its own timeout. Measured at
-        # ~55s for a statement with 20 new merchants against a local model.
-        # Awaiting that directly in an `async def` blocks the ONE event loop
-        # thread, so every other request in flight -- the dashboard, the
-        # session check, a second tab -- stops dead for the duration, not
-        # just this upload.
-        batch = await run_in_threadpool(
-            importing.stage,
+        batch = importing.stage(
             session,
             filename=file.filename or "statement.csv",
             content=text,
             account_id=account_id,
+            enrich=True,
+            model_features=False,
+            duplicate_checker=importing.NullDuplicateChecker(),
         )
     except importing.ImportError_ as exc:
         session.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _batch_out(session, batch)
+    result = _batch_out(session, batch)
+    background_tasks.add_task(_enrich_after_response, batch.id, session.get_bind())
+    return result
 
 
 @router.get("/import/batches", response_model=list[BatchOut])
@@ -236,7 +238,8 @@ def reopen_candidate(
 
 
 @router.post("/import/receipt", response_model=CandidateOut, status_code=201)
-async def upload_receipt(
+def upload_receipt(
+    background_tasks: BackgroundTasks,
     account_id: uuid.UUID = Form(...),
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
@@ -248,23 +251,25 @@ async def upload_receipt(
     """
     from app.domain.clock import today as clock_today
 
-    payload = await file.read()
+    payload = file.file.read(receipts.MAX_IMAGE_BYTES + 1)
     try:
-        # Off the event loop -- see upload_statement. This path is the worse
-        # of the two: a vision read, then a second vision pass to verify it,
-        # then categorisation and canonical names, each blocking with its own
-        # timeout. On a cold vision model that is minutes during which no
-        # other request could be served at all.
-        candidate = await run_in_threadpool(
-            receipts.stage,
+        candidate = receipts.stage(
             session,
             filename=file.filename or "receipt.jpg",
             image=payload,
             media_type=file.content_type or "application/octet-stream",
             account_id=account_id,
             today=clock_today(session),
+            verify=False,
+            enrich=True,
+            model_features=False,
+            duplicate_checker=importing.NullDuplicateChecker(),
         )
     except receipts.ReceiptError as exc:
         session.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _candidate_out(candidate)
+    result = _candidate_out(candidate)
+    background_tasks.add_task(
+        _enrich_after_response, candidate.batch_id, session.get_bind()
+    )
+    return result
